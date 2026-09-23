@@ -16,7 +16,7 @@ pip install --user .          # optional: installs the `bw600` command
 
 ## GUI
 
-- **Measurements:** voltage, current, power, resistance, capacity (mAh), energy (Wh), probe/MOS/CPU temperatures, fan, and the run state. There's also a big START/STOP button.
+- **Measurements:** voltage, current, power, resistance, capacity (mAh), energy (Wh), probe/MOS/CPU temperatures, fan speed (%), and the run state. There's also a big START/STOP button.
 - **Chart:** live curves you can pick, with a 1 min to all-data window, pause, and export to CSV or PNG.
 - **Recording:** continuous CSV log, with columns compatible with the vendor software.
 - **Test setup:**
@@ -24,6 +24,7 @@ pip install --user .          # optional: installs the `bw600` command
   - the set value, which means current, voltage, resistance or power depending on the device mode
   - cut-off voltage, charge full voltage and charge end current
   - the time limit
+  - the number of cycles for the charge/discharge cycle test
 - **Protection:** over-current, over-power, and over-temperature for both the probe (NTC) and the MOSFET.
 - **System:**
   - working and standby brightness, and standby time
@@ -32,6 +33,7 @@ pip install --user .          # optional: installs the `bw600` command
 - **Stop reasons:** when the load switches itself off, a banner and popup say why, for example "Cut-off voltage reached: 8.941 V ≤ 9 V". The BW600 doesn't report a reason, so the app infers it from the last readings and your limits. It recognises:
   - the cut-off voltage
   - the time limit
+  - the number of cycles for the charge/discharge cycle test
   - over-current, over-power and over-temperature (probe and MOSFET)
   - a completed charge
   - a lost input
@@ -55,6 +57,7 @@ bw600 set value 2.5                # setpoint (A / V / Ω / W per mode)
 bw600 set cutoff 3.0               # also: full-voltage full-current ocp opp ntc-otp mos-otp
 bw600 set time 1:30                # time limit h:mm
 bw600 set brightness 9             # also: standby-brightness standby-time language
+bw600 set cycles 10                # cycles for the charge/discharge cycle test
 bw600 action clear                 # also: zero, factory-reset
 bw600 raw --tx --seconds 3         # dump HID traffic
 ```
@@ -70,13 +73,13 @@ I reverse-engineered this from the vendor's Windows software.
 
 **Device to host:** 64 bytes, `AA 05 <addr> <type> … EE FF`.
 
-- **Type `03`, settings:** 11 big-endian floats starting at offset 4, in this order: set value, temperature/voltage/current calibration, cut-off voltage, full voltage, full current, OCP, OPP, NTC OTP, MOS OTP. After them come these bytes: mode, language, working brightness, standby brightness, standby time, time-limit hours, time-limit minutes.
-- **Type `05`, live data:** little-endian u32 values ÷ 1000, starting at offset 8, in this order: V, A, W, Ω, Wh, mAh, then the CPU, probe and MOS temperatures and the fan level. Byte `0x34` is the run flag, and byte `0x3C` holds the sign bits.
+- **Type `03`, settings:** 11 big-endian floats starting at offset 4, in this order: set value, temperature/voltage/current calibration, cut-off voltage, full voltage, full current, OCP, OPP, NTC OTP, MOS OTP. After them come these bytes: mode, language, working brightness, standby brightness, standby time, time-limit hours, time-limit minutes, cycle count.
+- **Type `05`, live data:** little-endian u32 values ÷ 1000, starting at offset 8, in this order: V, A, W, Ω, Wh, mAh, then the CPU, probe and MOS temperatures and the fan duty (%). Byte `0x34` is the run flag, and byte `0x3C` holds the sign bits.
 
 | cmd | function | payload |
 |-----|----------|---------|
 | 03 / 05 | read settings / live data | poll |
-| 20 | language | d0 = 1..4 |
+| 20 | language | d0 = 1..4 (1 + 2 × English + a second display flag) |
 | 21 | set value | float |
 | 22 / 23 / 24 | working brightness / standby brightness / standby time | d3 |
 | 25 | run | d0 = 1 on, 0 off |
@@ -85,11 +88,23 @@ I reverse-engineered this from the vendor's Windows software.
 | 2C / 2D / 2E / 2F | OCP / OPP / NTC OTP / MOS OTP | float |
 | 31 | time limit | d0 = value, d3 = 1 hours / 2 minutes |
 | 32 / 33 / 34 | clear capacity / factory reset / zero readings | – |
+| 37 | cycle count for the cycle test | d3 |
 | 47 … 50 | select mode 0 … 9 (cmd = 0x47 + mode) | – |
 
 `55 05 09 02 …` starts the firmware bootloader, so this tool refuses to send cmd `02`. Firmware updating isn't implemented.
 
-The firmware also handles commands 07, 35, 37, 45, 46 and 51, which this app doesn't use. 45, 46 and 51 switch between screens; I haven't worked out what the others do. It doesn't handle 30 or 36.
+The firmware also handles a few commands this app doesn't use:
+
+- **07** asks for the cycle-test results: one type-`07` reply per completed cycle, each holding time, capacity and energy. It didn't answer when tested with no cycle test run, so it probably only replies once a cycle test has results.
+- **35** (d0 = 1–3) chooses which record group the device's own TIME / GROUP / CAP / ELE records screen shows.
+- **45, 46, 51** switch between screens.
+- **02** with address `09` (`55 05 09 02 …`) restarts into the firmware updater. The app refuses to send it.
+
+It doesn't handle 30 or 36.
+
+### Fan
+
+The fan can't be controlled over USB. The firmware sets it by itself: 30 % below about 50 °C, rising to 100 % near 80 °C, and 100 % whenever the power passes the limit for the current range. No command writes the fan duty or the fan level.
 
 ### How the mode commands were found
 

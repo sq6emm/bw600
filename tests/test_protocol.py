@@ -63,6 +63,8 @@ def test_parse_settings():
     assert s.mos_over_temp == 120.0
     assert (s.language, s.work_brightness, s.standby_brightness, s.standby_time) == (3, 9, 3, 60)
     assert (s.time_limit_h, s.time_limit_m) == (0, 0)
+    assert s.cycle_count == 10
+    assert p.byte_frame(p.Cmd.CYCLE_COUNT, 5) == bytes.fromhex("55050137 00000005 EEFF")
 
 
 def test_wrong_type_rejected():

@@ -33,7 +33,7 @@ READOUTS = (
     ("ntc_temp", "Probe temp", "°C", 1),
     ("mos_temp", "MOS temp", "°C", 1),
     ("cpu_temp", "CPU temp", "°C", 1),
-    ("fan", "Fan level", "", 0),
+    ("fan", "Fan", "%", 0),
 )
 
 SERIES = (
@@ -70,6 +70,7 @@ FLOAT_SETTINGS_CAL = (
     ("Current calibration", p.Cmd.CAL_CURRENT, "", "cal_current"),
     ("Temperature calibration", p.Cmd.CAL_TEMP, "", "cal_temp"),
 )
+CYCLE_SETTING = ("Cycle count (cycle test)", p.Cmd.CYCLE_COUNT, "cycle_count")
 BYTE_SETTINGS = (
     ("Working screen brightness", p.Cmd.WORK_BRIGHTNESS, "work_brightness"),
     ("Standby screen brightness", p.Cmd.STANDBY_BRIGHTNESS, "standby_brightness"),
@@ -101,6 +102,7 @@ class App(tk.Tk):
         self.run_started: float | None = None
         self.run_elapsed = 0.0
         self.entries: dict[str, tk.StringVar] = {}
+        self.scales: dict[str, tk.IntVar] = {}
         self.current_labels: dict[str, tk.StringVar] = {}
 
         self._style()
@@ -259,6 +261,16 @@ class App(tk.Tk):
         for i, (label, cmd, unit, key) in enumerate(FLOAT_SETTINGS_TEST):
             self._setting_row(t, i, label, unit, key, lambda c=cmd, k=key: self.apply_float(c, k))
 
+        cy = ttk.LabelFrame(frame, text="Charge/discharge cycle test", padding=10)
+        cy.pack(fill="x", pady=(0, 10))
+        label, cmd, key = CYCLE_SETTING
+        ttk.Label(cy, text=label).grid(row=0, column=0, sticky="w")
+        self.scales[key] = tk.IntVar(value=0)
+        ttk.Spinbox(cy, from_=1, to=255, textvariable=self.scales[key], width=6).grid(row=0, column=1, padx=6)
+        ttk.Button(cy, text="Set", command=lambda: self.apply_byte(cmd, self.scales[key])).grid(row=0, column=2)
+        self.current_labels[key] = tk.StringVar(value="device: —")
+        ttk.Label(cy, textvariable=self.current_labels[key], style="Cap.TLabel").grid(row=0, column=3, padx=8, sticky="w")
+
         tl = ttk.LabelFrame(frame, text="Time limit (0:00 = unlimited)", padding=10)
         tl.pack(fill="x")
         self.entries["time_h"] = tk.StringVar()
@@ -322,7 +334,6 @@ class App(tk.Tk):
         nb.add(frame, text="System")
         disp = ttk.LabelFrame(frame, text="Display", padding=10)
         disp.pack(fill="x")
-        self.scales = {}
         for i, (label, cmd, key) in enumerate(BYTE_SETTINGS):
             ttk.Label(disp, text=label).grid(row=i, column=0, sticky="w", pady=3)
             var = tk.IntVar(value=0)
@@ -630,7 +641,7 @@ class App(tk.Tk):
             self.current_labels[key].set(f"device: {val:.4g}")
             if not self.settings_loaded:
                 self.entries[key].set(f"{val:.4g}")
-        for _l, _c, key in BYTE_SETTINGS:
+        for _l, _c, key in BYTE_SETTINGS + (CYCLE_SETTING,):
             self.current_labels[key].set(f"device: {getattr(s, key)}")
             if not self.settings_loaded:
                 self.scales[key].set(getattr(s, key))

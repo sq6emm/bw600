@@ -29,6 +29,7 @@ BYTE_CMDS = {
     "standby-brightness": p.Cmd.STANDBY_BRIGHTNESS,
     "standby-time": p.Cmd.STANDBY_TIME,
     "language": p.Cmd.LANGUAGE,
+    "cycles": p.Cmd.CYCLE_COUNT,
 }
 ACTIONS = {
     "clear": p.Cmd.CLEAR_CAPACITY,
@@ -62,7 +63,7 @@ def print_status(dev: BW600) -> None:
     print(f"Capacity      : {live.capacity:.1f} mAh")
     print(f"Energy        : {live.energy:.3f} Wh")
     print(f"Temps         : probe {live.ntc_temp:.1f} °C, MOS {live.mos_temp:.1f} °C, CPU {live.cpu_temp:.1f} °C")
-    print(f"Fan level     : {live.fan:g}")
+    print(f"Fan           : {live.fan:g} % (automatic)")
     print("Settings:")
     label, unit = p.SET_VALUE_LABEL.get(s.mode, ("Set value", ""))
     value = "n/a in this mode" if s.mode in p.NO_SET_VALUE_MODES else f"{s.set_value:g} {unit}"
@@ -71,6 +72,7 @@ def print_status(dev: BW600) -> None:
     print(f"  Full voltage            : {s.full_voltage:g} V")
     print(f"  Full (end) current      : {s.full_current:g} A")
     print(f"  Time limit              : {s.time_limit_h} h {s.time_limit_m} min")
+    print(f"  Cycle count (cycle test): {s.cycle_count}")
     print(f"  Over-current            : {s.over_current:g} A")
     print(f"  Over-power              : {s.over_power:g} W")
     print(f"  Probe over-temperature  : {s.ntc_over_temp:g} °C")

@@ -58,6 +58,7 @@ class Cmd(IntEnum):
     CLEAR_CAPACITY = 0x32  # "clear current" button: resets accumulated Ah/Wh
     FACTORY_RESET = 0x33
     DATA_ZERO = 0x34       # zero offset of measurements
+    CYCLE_COUNT = 0x37     # d3 = number of cycles for the charge/discharge cycle test
     SELECT_MODE = 0x47     # 0x47 + Mode (0..9); no payload. Found in the device firmware.
 
 
@@ -204,6 +205,7 @@ class Settings:
     standby_time: int = 0
     time_limit_h: int = 0
     time_limit_m: int = 0
+    cycle_count: int = 0
     raw: bytes = field(default=b"", repr=False)
 
 
@@ -215,7 +217,7 @@ _SETTINGS_FLOATS = (
 )
 _SETTINGS_BYTES = (
     "mode", "language", "work_brightness", "standby_brightness",
-    "standby_time", "time_limit_h", "time_limit_m",
+    "standby_time", "time_limit_h", "time_limit_m", "cycle_count",
 )
 
 
@@ -230,7 +232,7 @@ class Live:
     ntc_temp: float | None = None      # °C (external probe)
     cpu_temp: float | None = None      # °C
     mos_temp: float | None = None      # °C
-    fan: float | None = None           # fan level (30 while the load runs, 0 idle)
+    fan: float | None = None           # fan duty in % (set automatically by the firmware)
     running: bool = False
     status_a: int = 0                  # byte 0x35
     status_b: int = 0                  # byte 0x36
