@@ -56,7 +56,7 @@ bw600 mode cc                      # cc cv cr cp ir psu cable cdc cdcdc cycle (l
 bw600 set value 2.5                # setpoint (A / V / Ω / W per mode)
 bw600 set cutoff 3.0               # also: full-voltage full-current ocp opp ntc-otp mos-otp
 bw600 set time 1:30                # time limit h:mm
-bw600 set brightness 9             # also: standby-brightness standby-time language
+bw600 set brightness 9             # 0..9; also: standby-brightness (0..9) standby-time language
 bw600 set cycles 10                # cycles for the charge/discharge cycle test
 bw600 action clear                 # also: zero, factory-reset
 bw600 raw --tx --seconds 3         # dump HID traffic
@@ -81,7 +81,7 @@ I reverse-engineered this from the vendor's Windows software.
 | 03 / 05 | read settings / live data | poll |
 | 20 | language | d0 = 1..4 (1 + 2 × English + a second display flag) |
 | 21 | set value | float |
-| 22 / 23 / 24 | working brightness / standby brightness / standby time | d3 |
+| 22 / 23 / 24 | working brightness (0–9) / standby brightness (0–9) / standby time | d3 |
 | 25 | run | d0 = 1 on, 0 off |
 | 26 / 27 / 28 | temperature / voltage / current calibration | float |
 | 29 / 2A / 2B | cut-off voltage / full voltage / full current | float |

@@ -266,7 +266,8 @@ class App(tk.Tk):
         label, cmd, key = CYCLE_SETTING
         ttk.Label(cy, text=label).grid(row=0, column=0, sticky="w")
         self.scales[key] = tk.IntVar(value=0)
-        ttk.Spinbox(cy, from_=1, to=255, textvariable=self.scales[key], width=6).grid(row=0, column=1, padx=6)
+        lo, hi = p.BYTE_RANGES[cmd]
+        ttk.Spinbox(cy, from_=lo, to=hi, textvariable=self.scales[key], width=6).grid(row=0, column=1, padx=6)
         ttk.Button(cy, text="Set", command=lambda: self.apply_byte(cmd, self.scales[key])).grid(row=0, column=2)
         self.current_labels[key] = tk.StringVar(value="device: —")
         ttk.Label(cy, textvariable=self.current_labels[key], style="Cap.TLabel").grid(row=0, column=3, padx=8, sticky="w")
@@ -337,9 +338,11 @@ class App(tk.Tk):
         for i, (label, cmd, key) in enumerate(BYTE_SETTINGS):
             ttk.Label(disp, text=label).grid(row=i, column=0, sticky="w", pady=3)
             var = tk.IntVar(value=0)
-            sb = ttk.Spinbox(disp, from_=0, to=255, textvariable=var, width=6)
+            lo, hi = p.BYTE_RANGES[cmd]
+            sb = ttk.Spinbox(disp, from_=lo, to=hi, textvariable=var, width=6)
             sb.grid(row=i, column=1, padx=6)
             ttk.Button(disp, text="Set", command=lambda c=cmd, v=var: self.apply_byte(c, v)).grid(row=i, column=2)
+            ttk.Label(disp, text=f"({lo}–{hi})", style="Cap.TLabel").grid(row=i, column=4, sticky="w")
             cur = tk.StringVar(value="device: —")
             ttk.Label(disp, textvariable=cur, style="Cap.TLabel").grid(row=i, column=3, padx=8, sticky="w")
             self.scales[key] = var
@@ -446,10 +449,10 @@ class App(tk.Tk):
         if not self._need_dev():
             return
         try:
-            v = int(var.get())
-        except (ValueError, tk.TclError):
-            return
-        self.dev.set_byte(cmd, max(0, min(255, v)))
+            self.dev.set_byte(cmd, int(var.get()))
+        except (ValueError, tk.TclError) as e:
+            messagebox.showerror("BW600", str(e) if isinstance(e, ValueError) and "must be" in str(e)
+                                 else "Please enter a whole number.")
 
     def apply_time(self):
         if not self._need_dev():

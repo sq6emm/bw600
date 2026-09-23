@@ -178,6 +178,7 @@ class BW600:
         self.set_float(p.Cmd.SET_VALUE, value)
 
     def set_byte(self, cmd: p.Cmd, value: int) -> None:
+        p.check_byte(cmd, value)
         self.send(p.byte_frame(cmd, value, self.addr))
         self.request_settings()
 

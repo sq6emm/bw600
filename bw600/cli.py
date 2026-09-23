@@ -216,7 +216,7 @@ def main(argv=None) -> int:
                 dev.simple(ACTIONS[args.name])
                 time.sleep(0.6)
                 print("done")
-    except DeviceError as e:
+    except (DeviceError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     return 0

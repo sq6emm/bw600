@@ -40,8 +40,8 @@ class Cmd(IntEnum):
     READ_LIVE = 0x05       # 55 05 01 05 0B 00 8C EE FF -> type 05 reply
     LANGUAGE = 0x20        # d0 = 1..4
     SET_VALUE = 0x21       # float: current (CC) / voltage (CV) / resistance (CR) / power (CP)
-    WORK_BRIGHTNESS = 0x22   # d3 = level
-    STANDBY_BRIGHTNESS = 0x23  # d3 = level
+    WORK_BRIGHTNESS = 0x22   # d3 = level 0..9
+    STANDBY_BRIGHTNESS = 0x23  # d3 = level 0..9
     STANDBY_TIME = 0x24    # d3 = value
     RUN = 0x25             # d0 = 1 start, 0 stop
     CAL_TEMP = 0x26        # float
@@ -60,6 +60,22 @@ class Cmd(IntEnum):
     DATA_ZERO = 0x34       # zero offset of measurements
     CYCLE_COUNT = 0x37     # d3 = number of cycles for the charge/discharge cycle test
     SELECT_MODE = 0x47     # 0x47 + Mode (0..9); no payload. Found in the device firmware.
+
+
+# Valid ranges of the single-byte settings.
+BYTE_RANGES = {
+    Cmd.WORK_BRIGHTNESS: (0, 9),
+    Cmd.STANDBY_BRIGHTNESS: (0, 9),
+    Cmd.STANDBY_TIME: (0, 255),
+    Cmd.CYCLE_COUNT: (1, 255),
+}
+
+
+def check_byte(cmd: int, value: int) -> int:
+    lo, hi = BYTE_RANGES.get(cmd, (0, 255))
+    if not lo <= value <= hi:
+        raise ValueError(f"value must be {lo}..{hi}")
+    return value
 
 
 # Commands that must never be sent from this tool (firmware upgrade path).

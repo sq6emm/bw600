@@ -67,6 +67,14 @@ def test_parse_settings():
     assert p.byte_frame(p.Cmd.CYCLE_COUNT, 5) == bytes.fromhex("55050137 00000005 EEFF")
 
 
+def test_byte_ranges():
+    assert p.check_byte(p.Cmd.WORK_BRIGHTNESS, 9) == 9
+    assert p.check_byte(p.Cmd.STANDBY_BRIGHTNESS, 0) == 0
+    for cmd, bad in ((p.Cmd.WORK_BRIGHTNESS, 10), (p.Cmd.STANDBY_BRIGHTNESS, -1), (p.Cmd.CYCLE_COUNT, 0)):
+        with pytest.raises(ValueError):
+            p.check_byte(cmd, bad)
+
+
 def test_wrong_type_rejected():
     assert p.parse_settings(LIVE) is None
     assert p.parse_live(SETTINGS) is None
