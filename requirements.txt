@@ -1,0 +1,4 @@
+# Runtime dependencies. Tkinter is not on PyPI: install it from the system
+# (Debian/Ubuntu: sudo apt install python3-tk).
+matplotlib>=3.5    # charts
+tinytuya>=1.13     # WiFi connection to the BW600-DK (optional: USB works without it)

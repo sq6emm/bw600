@@ -9,10 +9,15 @@ Desktop application and CLI for the ATORCH BW600 and BW600-DK (WiFi/Bluetooth) e
 ## Setup
 
 ```sh
-./install-udev-rule.sh        # once: gives your user access to the device (needs sudo)
-python3 -m bw600              # start the GUI
-pip install --user .          # optional: installs the `bw600` command
+git clone https://github.com/sq6emm/bw600.git && cd bw600
+sudo apt install python3-tk                 # Tkinter (not on PyPI)
+./install-udev-rule.sh                      # once: gives your user access to the device over USB
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt   # matplotlib, and tinytuya for WiFi
+.venv/bin/python -m bw600                   # start the GUI
 ```
+
+`requirements.txt` lists the runtime dependencies. `tinytuya` is only needed for the WiFi connection; USB works without it. For the tests, use `.venv/bin/pip install -r requirements-dev.txt`, then `.venv/bin/python -m pytest`. If your system already has matplotlib (`sudo apt install python3-matplotlib`), plain `python3 -m bw600` also works over USB, with no virtual environment.
 
 ## GUI
 
@@ -147,7 +152,7 @@ The BW600-DK's Tuya WiFi module can be used **directly over your local network**
 3. Install the WiFi extra and run the key wizard **in a normal terminal**, so the secret stays out of logs:
 
    ```sh
-   python3 -m venv --system-site-packages .venv && .venv/bin/pip install tinytuya
+   .venv/bin/pip install -r requirements.txt     # if not done already (includes tinytuya)
    mkdir -p ~/.config/bw600/tuya && cd ~/.config/bw600/tuya
    ~/path/to/bw600/.venv/bin/python -m tinytuya wizard      # Access ID, Secret, region, device ID
    chmod 600 *.json                                          # these files hold the API secret and device key
