@@ -256,6 +256,8 @@ class Settings:
     time_limit_h: int = 0
     time_limit_m: int = 0
     cycle_count: int = 0
+    child_lock: bool | None = None     # WiFi only (Tuya DP 115)
+    record_slot: str | None = None     # WiFi only (Tuya DP 116)
     raw: bytes = field(default=b"", repr=False)
 
 

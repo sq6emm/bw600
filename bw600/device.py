@@ -166,6 +166,16 @@ class BW600:
             self.info = next((d for d in find_devices() if d.path == path),
                              DeviceInfo(path, "ATORCH BW600", ""))
         self.dev = HidrawDevice(path)
+        self._init_state(interval)
+
+    # Everything a connection can do; subclasses (e.g. WiFi) narrow this down.
+    transport = "USB"
+    capabilities: frozenset[str] | None = None   # None = everything
+
+    def supports(self, feature: str) -> bool:
+        return self.capabilities is None or feature in self.capabilities
+
+    def _init_state(self, interval: float) -> None:
         self.addr = p.DEFAULT_ADDR
         self.interval = interval
         self.live: p.Live | None = None
@@ -400,34 +410,41 @@ class BW600:
         if t == 0x05:
             live = p.parse_live(buf, self.live)
             if live:
-                event = self._track_run(live)
-                self.live = live
-                for cb in list(self.on_live):
-                    cb(live)
-                for alarm in self.alarms.check(live):
-                    if self.alarms.config.stop_load and live.running:
-                        self.run(False, note=f"Alarm: {alarm.message}")
-                    for cb in list(self.on_alarm):
-                        cb(alarm)
-                if event:
-                    for cb in list(self.on_stop):
-                        cb(event)
+                self._process_live(live)
         elif t == 0x03:
             s = p.parse_settings(buf)
             if s:
-                self.settings = s
-                if not self._cal_backup_done:
-                    self._cal_backup_done = True
-                    try:
-                        _save_calibration_backup(self.info.serial, s)
-                    except OSError:
-                        pass
-                for cb in list(self.on_settings):
-                    cb(s)
+                self._process_settings(s)
         elif t == 0x04:
             addr = p.parse_scan(buf)
             if addr is not None:
                 self.addr = addr
+
+    def _process_live(self, live: p.Live) -> None:
+        """Shared by all transports: stop tracking, callbacks and alarms."""
+        event = self._track_run(live)
+        self.live = live
+        for cb in list(self.on_live):
+            cb(live)
+        for alarm in self.alarms.check(live):
+            if self.alarms.config.stop_load and live.running:
+                self.run(False, note=f"Alarm: {alarm.message}")
+            for cb in list(self.on_alarm):
+                cb(alarm)
+        if event:
+            for cb in list(self.on_stop):
+                cb(event)
+
+    def _process_settings(self, s: p.Settings) -> None:
+        self.settings = s
+        if not self._cal_backup_done and self.supports("calibration"):
+            self._cal_backup_done = True
+            try:
+                _save_calibration_backup(self.info.serial, s)
+            except OSError:
+                pass
+        for cb in list(self.on_settings):
+            cb(s)
 
     def _track_run(self, live: p.Live) -> p.StopEvent | None:
         now = time.monotonic()

@@ -94,8 +94,10 @@ def fmt(v, digits=3):
 
 
 class App(tk.Tk):
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, wifi: bool = False):
         super().__init__()
+        self.transport = "WiFi" if wifi else "USB"
+        self.gated: list[tuple[str, list]] = []   # (feature, widgets) disabled when unsupported
         self.title("ATORCH BW600 Control — by SQ6EMM")
         self.geometry("1280x870")
         self.minsize(1000, 680)
@@ -140,6 +142,11 @@ class App(tk.Tk):
         self.status_var = tk.StringVar(value="Disconnected")
         ttk.Label(top, textvariable=self.status_var, style="Status.TLabel").pack(side="left")
         ttk.Button(top, text="Reconnect", command=self.reconnect).pack(side="right")
+        self.transport_var = tk.StringVar(value=self.transport)
+        tsel = ttk.Combobox(top, textvariable=self.transport_var, values=("USB", "WiFi"), state="readonly", width=6)
+        tsel.pack(side="right", padx=(0, 6))
+        tsel.bind("<<ComboboxSelected>>", lambda _e: self.switch_transport())
+        ttk.Label(top, text="Connection:").pack(side="right", padx=(0, 4))
         self.mode_var = tk.StringVar(value="Mode: ?")
         ttk.Label(top, textvariable=self.mode_var, style="Status.TLabel").pack(side="right", padx=20)
 
@@ -226,9 +233,12 @@ class App(tk.Tk):
     def _setting_row(self, parent, row, label, unit, key, apply):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=3)
         var = tk.StringVar()
-        ttk.Entry(parent, textvariable=var, width=12).grid(row=row, column=1, padx=6)
+        entry = ttk.Entry(parent, textvariable=var, width=12)
+        entry.grid(row=row, column=1, padx=6)
         ttk.Label(parent, text=unit, width=4).grid(row=row, column=2, sticky="w")
-        ttk.Button(parent, text="Set", command=apply).grid(row=row, column=3, padx=4)
+        btn = ttk.Button(parent, text="Set", command=apply)
+        btn.grid(row=row, column=3, padx=4)
+        self._gate(key, entry, btn)
         cur = tk.StringVar(value="device: —")
         ttk.Label(parent, textvariable=cur, style="Cap.TLabel").grid(row=row, column=4, sticky="w", padx=8)
         self.entries[key] = var
@@ -278,8 +288,11 @@ class App(tk.Tk):
         ttk.Label(cy, text=label).grid(row=0, column=0, sticky="w")
         self.scales[key] = tk.IntVar(value=0)
         lo, hi = p.BYTE_RANGES[cmd]
-        ttk.Spinbox(cy, from_=lo, to=hi, textvariable=self.scales[key], width=6).grid(row=0, column=1, padx=6)
-        ttk.Button(cy, text="Set", command=lambda: self.apply_byte(cmd, self.scales[key])).grid(row=0, column=2)
+        sb = ttk.Spinbox(cy, from_=lo, to=hi, textvariable=self.scales[key], width=6)
+        sb.grid(row=0, column=1, padx=6)
+        b = ttk.Button(cy, text="Set", command=lambda: self.apply_byte(cmd, self.scales[key]))
+        b.grid(row=0, column=2)
+        self._gate("cycle_count", sb, b)
         self.current_labels[key] = tk.StringVar(value="device: —")
         ttk.Label(cy, textvariable=self.current_labels[key], style="Cap.TLabel").grid(row=0, column=3, padx=8, sticky="w")
 
@@ -335,7 +348,7 @@ class App(tk.Tk):
         self.alarm_state_var = tk.StringVar(value="")
         ttk.Label(a, textvariable=self.alarm_state_var, style="Cap.TLabel").grid(row=4, column=1, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Label(frame, style="Cap.TLabel", wraplength=700, justify="left",
-                  text="Checked on every reading (4× per second), also while the load is idle — e.g. it warns when "
+                  text="Checked on every reading (4× a second over USB, about once a second over WiFi), also while the load is idle — e.g. it warns when "
                        "a too-high voltage is connected. An alarm triggers once when the limit is exceeded for two "
                        "readings in a row and re-arms once the value is back 2 % inside the limit. The under-voltage alarm "
                        "ignores readings below 0.5 V (nothing connected). Settings are saved "
@@ -352,7 +365,9 @@ class App(tk.Tk):
             lo, hi = p.BYTE_RANGES[cmd]
             sb = ttk.Spinbox(disp, from_=lo, to=hi, textvariable=var, width=6)
             sb.grid(row=i, column=1, padx=6)
-            ttk.Button(disp, text="Set", command=lambda c=cmd, v=var: self.apply_byte(c, v)).grid(row=i, column=2)
+            b = ttk.Button(disp, text="Set", command=lambda c=cmd, v=var: self.apply_byte(c, v))
+            b.grid(row=i, column=2)
+            self._gate(key, sb, b)
             ttk.Label(disp, text=f"({lo}–{hi})", style="Cap.TLabel").grid(row=i, column=4, sticky="w")
             cur = tk.StringVar(value="device: —")
             ttk.Label(disp, textvariable=cur, style="Cap.TLabel").grid(row=i, column=3, padx=8, sticky="w")
@@ -362,26 +377,36 @@ class App(tk.Tk):
         lang = ttk.LabelFrame(frame, text="Language", padding=10)
         lang.pack(fill="x", pady=10)
         for text, opt in (("中文", 1), ("English", 3)):
-            ttk.Button(lang, text=text, command=lambda o=opt: self.apply_lang(o)).pack(side="left", padx=4)
+            b = ttk.Button(lang, text=text, command=lambda o=opt: self.apply_lang(o))
+            b.pack(side="left", padx=4)
+            self._gate("language", b)
         ttk.Label(lang, text="Alt:", style="Cap.TLabel").pack(side="left", padx=(12, 2))
         for text, opt in (("中文 (2)", 2), ("English (4)", 4)):
-            ttk.Button(lang, text=text, command=lambda o=opt: self.apply_lang(o)).pack(side="left", padx=4)
+            b = ttk.Button(lang, text=text, command=lambda o=opt: self.apply_lang(o))
+            b.pack(side="left", padx=4)
+            self._gate("language", b)
         self.current_labels["language"] = tk.StringVar(value="device: —")
         ttk.Label(lang, textvariable=self.current_labels["language"], style="Cap.TLabel").pack(side="left", padx=8)
 
         act = ttk.LabelFrame(frame, text="Data", padding=10)
         act.pack(fill="x")
-        ttk.Button(act, text="Clear capacity / energy counters",
-                   command=lambda: self.confirm_simple(p.Cmd.CLEAR_CAPACITY, "Clear the accumulated capacity (mAh) and energy (Wh)?")).pack(side="left", padx=4)
-        ttk.Button(act, text="Zero readings (data zero)",
-                   command=lambda: self.confirm_simple(p.Cmd.DATA_ZERO, "Zero the measurement offsets? Do this with nothing connected to the input.")).pack(side="left", padx=4)
-        ttk.Button(act, text="Factory reset…", style="Danger.TButton",
-                   command=self.factory_reset_dialog).pack(side="left", padx=4)
+        for feature, text, style, cmd in (
+                ("clear_capacity", "Clear capacity / energy counters", "TButton",
+                 lambda: self.confirm_simple(p.Cmd.CLEAR_CAPACITY, "Clear the accumulated capacity (mAh) and energy (Wh)?")),
+                ("data_zero", "Zero readings (data zero)", "TButton",
+                 lambda: self.confirm_simple(p.Cmd.DATA_ZERO, "Zero the measurement offsets? Do this with nothing connected to the input.")),
+                ("factory_reset", "Factory reset…", "Danger.TButton", self.factory_reset_dialog)):
+            b = ttk.Button(act, text=text, style=style, command=cmd)
+            b.pack(side="left", padx=4)
+            self._gate(feature, b)
 
         snap = ttk.LabelFrame(frame, text="Settings backup", padding=10)
         snap.pack(fill="x", pady=10)
-        ttk.Button(snap, text="Save settings…", command=self.save_snapshot).pack(side="left", padx=4)
-        ttk.Button(snap, text="Restore settings from snapshot…", command=self.restore_snapshot).pack(side="left", padx=4)
+        for text, cmd in (("Save settings…", self.save_snapshot),
+                          ("Restore settings from snapshot…", self.restore_snapshot)):
+            b = ttk.Button(snap, text=text, command=cmd)
+            b.pack(side="left", padx=4)
+            self._gate("snapshots", b)
         ttk.Label(snap, style="Cap.TLabel", wraplength=420, justify="left",
                   text="A snapshot is saved automatically before every factory reset. Restoring writes all "
                        "settings except calibration (restore that on the Calibration tab).").pack(side="left", padx=8)
@@ -412,8 +437,10 @@ class App(tk.Tk):
         self.cal_state_lbl = tk.Label(lock, textvariable=self.cal_state_var, font=("DejaVu Sans", 11, "bold"),
                                       fg="#58151c", padx=6)
         self.cal_state_lbl.pack(side="left")
-        ttk.Button(lock, text="Unlock…", command=self.unlock_calibration).pack(side="left", padx=6)
-        ttk.Button(lock, text="Lock now", command=self.lock_calibration).pack(side="left")
+        for text, cmd, pad in (("Unlock…", self.unlock_calibration, 6), ("Lock now", self.lock_calibration, 0)):
+            b = ttk.Button(lock, text=text, command=cmd)
+            b.pack(side="left", padx=pad)
+            self._gate("calibration", b)
 
         g = ttk.LabelFrame(frame, text="Calibration factors", padding=10)
         g.pack(fill="x")
@@ -451,9 +478,31 @@ class App(tk.Tk):
         ttk.Label(frame, textvariable=self.info_var, style="Cap.TLabel", justify="left").pack(fill="x")
 
     # ------------------------------------------------------------ device
+    def _gate(self, feature, *widgets):
+        self.gated.append((feature, list(widgets)))
+
+    def _apply_capabilities(self):
+        for feature, widgets in self.gated:
+            ok = self.dev is None or self.dev.supports(feature)
+            for w in widgets:
+                w.state(["!disabled"] if ok else ["disabled"])
+        if self.dev and not self.dev.supports("calibration"):
+            for w in self.cal_widgets:
+                w.state(["disabled"])
+
+    def switch_transport(self):
+        new = self.transport_var.get()
+        if new != self.transport:
+            self.transport = new
+            self.reconnect()
+
     def connect(self):
         try:
-            self.dev = BW600(self.path)
+            if self.transport == "WiFi":
+                from .tuya import TuyaBW600
+                self.dev = TuyaBW600()
+            else:
+                self.dev = BW600(self.path)
         except DeviceError as e:
             self.dev = None
             self.status_var.set(f"⚠ {e}")
@@ -468,10 +517,12 @@ class App(tk.Tk):
         self.dev.start()
         self.dev.request_settings()
         self.settings_loaded = False
+        self._apply_capabilities()
         info = self.dev.info
         self.info_var.set(f"Device: {info.name}   serial: {info.serial}   node: {info.path}")
         version = p.firmware_version(info.name)
-        self.fw_var.set(f"Installed: V{version}" if version else f"Installed: unknown ({info.name})")
+        self.fw_var.set(f"Installed: V{version}" if version else
+                        "Installed: shown over USB only" if self.dev.transport == "WiFi" else f"Installed: unknown ({info.name})")
 
     def reconnect(self):
         if self.dev:
@@ -763,7 +814,7 @@ class App(tk.Tk):
         try:
             data = bytes.fromhex(self.raw_entry.get())
             self.dev.send(data)
-        except (ValueError, CalibrationLocked) as e:
+        except (ValueError, DeviceError) as e:
             messagebox.showerror("BW600", str(e))
 
     # ------------------------------------------------------------ updates
@@ -795,7 +846,7 @@ class App(tk.Tk):
             if self.dev.error:
                 self.status_var.set(f"⚠ {self.dev.error}")
             elif self.dev.online:
-                self.status_var.set(f"● Online — {self.dev.info.name} ({self.dev.info.path})")
+                self.status_var.set(f"● Online via {self.dev.transport} — {self.dev.info.name} ({self.dev.info.path})")
             else:
                 self.status_var.set("○ Waiting for device…")
         self.after(REFRESH_MS, self.refresh)
@@ -905,7 +956,11 @@ class App(tk.Tk):
         self.current_labels["mode"].set(f"device: {p.mode_name(s.mode)}")
         if not self.settings_loaded or not self.mode_choice.get():
             self.mode_choice.set(p.mode_name(s.mode))
+        usb_only = lambda k: self.dev is not None and not self.dev.supports(k)  # noqa: E731
         for key in ["set_value"] + [k for *_x, k in FLOAT_SETTINGS_TEST + FLOAT_SETTINGS_PROTECT + FLOAT_SETTINGS_CAL]:
+            if usb_only(key if key not in p.CAL_FIELDS.values() else "calibration"):
+                self.current_labels[key].set("USB only")
+                continue
             if key == "set_value" and s.mode in p.NO_SET_VALUE_MODES:
                 self.current_labels[key].set("device: n/a in this mode")
                 continue
@@ -915,10 +970,13 @@ class App(tk.Tk):
             if not self.settings_loaded:
                 self.entries[key].set(f"{val:.{digits}g}")
         for _l, _c, key in BYTE_SETTINGS + (CYCLE_SETTING,):
+            if usb_only(key):
+                self.current_labels[key].set("USB only")
+                continue
             self.current_labels[key].set(f"device: {getattr(s, key)}")
             if not self.settings_loaded:
                 self.scales[key].set(getattr(s, key))
-        self.current_labels["language"].set(f"device: {s.language}")
+        self.current_labels["language"].set("USB only" if usb_only("language") else f"device: {s.language}")
         self.current_labels["time"].set(f"device: {s.time_limit_h} h {s.time_limit_m} min")
         if not self.settings_loaded:
             self.entries["time_h"].set(str(s.time_limit_h))
@@ -1012,5 +1070,5 @@ class App(tk.Tk):
         self.destroy()
 
 
-def main(path: str | None = None):
-    App(path).mainloop()
+def main(path: str | None = None, wifi: bool = False):
+    App(path, wifi).mainloop()

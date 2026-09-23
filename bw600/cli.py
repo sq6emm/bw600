@@ -57,19 +57,29 @@ def wait_for(dev: BW600, attr: str, timeout: float = 3.0):
 def print_status(dev: BW600) -> None:
     live = wait_for(dev, "live")
     s = wait_for(dev, "settings")
+
+    def f(v, fmt="{:.3f}", unit=""):
+        return "—" if v is None else fmt.format(v) + (f" {unit}" if unit else "")
+
+    def usb(feature, text):
+        return text if dev.supports(feature) else "USB only"
+
+    print(f"Connection    : {dev.transport}")
     print(f"Device        : {dev.info.name} (serial {dev.info.serial}, {dev.info.path})")
-    print(f"Firmware      : V{p.firmware_version(dev.info.name) or '?'}")
+    if dev.transport == "USB":
+        print(f"Firmware      : V{p.firmware_version(dev.info.name) or '?'}")
     print(f"Mode          : {p.mode_name(s.mode)}")
-    print(f"State         : {'RUNNING' if live.running else 'idle'}  (status {live.status_a}/{live.status_b})")
-    print(f"Voltage       : {live.voltage:.3f} V")
-    direction = "discharging" if live.discharging else ("charging" if live.running else "")
-    print(f"Current       : {live.amps:.3f} A {direction}")
-    print(f"Power         : {live.power:.3f} W")
-    print(f"Resistance    : {live.resistance:.3f} Ω")
-    print(f"Capacity      : {live.capacity:.1f} mAh")
-    print(f"Energy        : {live.energy:.3f} Wh")
-    print(f"Temps         : probe {live.ntc_temp:.1f} °C, MOS {live.mos_temp:.1f} °C, CPU {live.cpu_temp:.1f} °C")
-    print(f"Fan           : {live.fan:g} % (automatic)")
+    print(f"State         : {'RUNNING' if live.running else 'idle'}")
+    print(f"Voltage       : {f(live.voltage, unit='V')}")
+    direction = "discharging" if live.discharging else ("charging" if live.running and live.amps else "")
+    print(f"Current       : {f(live.amps, unit='A')} {direction}")
+    print(f"Power         : {f(live.power, unit='W')}")
+    print(f"Resistance    : {f(live.resistance, unit='Ω')}")
+    print(f"Capacity      : {f(live.capacity, '{:.1f}', 'mAh')}")
+    print(f"Energy        : {f(live.energy, unit='Wh')}")
+    print(f"Temps         : probe {f(live.ntc_temp, '{:.1f}')} °C, MOS {f(live.mos_temp, '{:.1f}')} °C, "
+          f"CPU {f(live.cpu_temp, '{:.1f}')} °C")
+    print(f"Fan           : {f(live.fan, '{:g}', '% (automatic)')}")
     print("Settings:")
     label, unit = p.SET_VALUE_LABEL.get(s.mode, ("Set value", ""))
     value = "n/a in this mode" if s.mode in p.NO_SET_VALUE_MODES else f"{s.set_value:g} {unit}"
@@ -78,15 +88,18 @@ def print_status(dev: BW600) -> None:
     print(f"  Full voltage            : {s.full_voltage:g} V")
     print(f"  Full (end) current      : {s.full_current:g} A")
     print(f"  Time limit              : {s.time_limit_h} h {s.time_limit_m} min")
-    print(f"  Cycle count (cycle test): {s.cycle_count}")
-    print(f"  Over-current            : {s.over_current:g} A")
-    print(f"  Over-power              : {s.over_power:g} W")
+    print(f"  Cycle count (cycle test): {usb('cycle_count', str(s.cycle_count))}")
+    print(f"  Over-current            : {usb('over_current', f'{s.over_current:g} A')}")
+    print(f"  Over-power              : {usb('over_power', f'{s.over_power:g} W')}")
     print(f"  Probe over-temperature  : {s.ntc_over_temp:g} °C")
     print(f"  MOS over-temperature    : {s.mos_over_temp:g} °C")
-    print(f"  Brightness work/standby : {s.work_brightness} / {s.standby_brightness}")
-    print(f"  Standby time            : {s.standby_time}")
-    print(f"  Language                : {s.language}")
-    print(f"  Calibration V / I / T   : {s.cal_voltage:g} / {s.cal_current:g} / {s.cal_temp:g}")
+    print(f"  Brightness work/standby : {s.work_brightness} / {usb('standby_brightness', str(s.standby_brightness))}")
+    print(f"  Standby time            : {usb('standby_time', str(s.standby_time))}")
+    print(f"  Language                : {usb('language', str(s.language))}")
+    print(f"  Calibration V / I / T   : "
+          f"{usb('calibration', f'{s.cal_voltage:g} / {s.cal_current:g} / {s.cal_temp:g}')}")
+    if dev.transport == "WiFi":
+        print(f"  Test-record slot        : {s.record_slot}")
 
 
 def confirm_calibration(args, description: str) -> bool:
@@ -181,6 +194,8 @@ def cmd_raw(dev: BW600, args) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="bw600", description="ATORCH BW600 electronic load control — by SQ6EMM")
     ap.add_argument("--device", help="hidraw node (default: auto-detect)")
+    ap.add_argument("--wifi", action="store_true",
+                    help="connect over WiFi (BW600-DK; needs tinytuya and ~/.config/bw600/tuya/devices.json)")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("gui", help="start the graphical application (default)")
     sub.add_parser("list", help="list connected devices")
@@ -222,7 +237,7 @@ def main(argv=None) -> int:
 
     if args.cmd in (None, "gui"):
         from .gui import main as gui_main
-        gui_main(args.device)
+        gui_main(args.device, wifi=args.wifi)
         return 0
     if args.cmd == "firmware":
         return cmd_firmware(args)
@@ -235,7 +250,12 @@ def main(argv=None) -> int:
         return 0 if devs else 1
 
     try:
-        with BW600(args.device) as dev:
+        if args.wifi:
+            from .tuya import TuyaBW600
+            client = TuyaBW600()
+        else:
+            client = BW600(args.device)
+        with client as dev:
             if args.cmd == "status":
                 print_status(dev)
             elif args.cmd == "monitor":

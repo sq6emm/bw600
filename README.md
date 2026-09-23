@@ -131,8 +131,55 @@ Copies of every file ATORCH publishes for the BW600 and the BW600-DK (PC softwar
 
 The firmware version is part of the USB product string (`ATORCH BW600 V2.0.5`). `bw600 firmware` and the System tab compare it with the files on ATORCH's BW600 page and can download the newest one. This app doesn't flash firmware: use ATORCH's Windows tool for that. The update protocol is only partly worked out (the vendor tool sends `55 05 09 02` to restart into the updater, then transfers the file in `CC …` packets), and a failed flash could leave the device unusable.
 
-### WiFi / Bluetooth models
+### WiFi (BW600-DK)
 
-The BW600-DK (the WiFi version) has a Tuya WiFi module (Smart Life / Tuya app). The BW600's own chip talks to that module over a serial line using Tuya's MCU protocol (`55 AA 03 …`). The only network command it can send is `04`, "reset WiFi / enter pairing mode". It never handles the WiFi name, password or cloud token, because the Tuya app gives those straight to the WiFi module. So WiFi **can't be set up over USB**: pair the device with the Tuya / Smart Life app, or use **WIFI Reset** in the device's menu to re-pair it. A factory reset (`33`) also sends `04`.
+The BW600-DK's Tuya WiFi module can be used **directly over your local network**. Once set up, nothing goes through the cloud.
 
+**One-time setup:**
+
+1. Pair the tester with the **Smart Life** / Tuya app on a **2.4 GHz** network. It advertises as `TUYA_` over Bluetooth until it's paired. If it won't pair, use **WIFI Reset** in its menu.
+2. Get the device's **local key**. The only practical way is a free developer account at [iot.tuya.com](https://iot.tuya.com):
+   - create a cloud project (*Smart Home*; the data centre must match your app account's region);
+   - link your Smart Life account under **Devices → Link App Account** by scanning the QR code with the app;
+   - copy the *Access ID* and *Access Secret*.
+3. Install the WiFi extra and run the key wizard **in a normal terminal**, so the secret stays out of logs:
+
+   ```sh
+   python3 -m venv --system-site-packages .venv && .venv/bin/pip install tinytuya
+   mkdir -p ~/.config/bw600/tuya && cd ~/.config/bw600/tuya
+   ~/path/to/bw600/.venv/bin/python -m tinytuya wizard      # Access ID, Secret, region, device ID
+   chmod 600 *.json                                          # these files hold the API secret and device key
+   ```
+
+**Use:**
+
+```sh
+.venv/bin/python -m bw600 --wifi            # GUI over WiFi (or switch "Connection" in the top bar)
+.venv/bin/python -m bw600 --wifi status     # every CLI command accepts --wifi
+```
+
+Over WiFi the app offers everything the Tuya data points cover:
+- readings: voltage, current, power, capacity, energy, and the probe, MOS and CPU temperatures;
+- load on/off, mode, set value, cut-off and full-charge voltage, charge end current, time limit, both over-temperature limits, working brightness, and clearing the counters;
+- charts, CSV logging, stop reasons and application alarms work as over USB.
+
+The rest is USB-only and greyed out in the GUI: over-current/over-power limits, calibration, standby settings, language, cycle count, zeroing, factory reset, snapshots, and the CDxn cycle mode.
+
+While connected, the app turns on the device's *live refresh* (DP 122: 1-second updates instead of 60-second ones) and restores the previous setting afterwards. Commands are sent at once. A newer command to the same setting replaces an older one that hasn't been sent yet, so a quick start→stop can't leave the load running. Every stop is checked and resent until the device reports that the load is off. On the test unit, start takes 0.5–1.5 s and stop about 0.5 s.
+
+| DP | Meaning | | DP | Meaning |
+|---|---|---|---|---|
+| 101 | voltage (V ÷ 100) | | 112 | cut-off voltage (V ÷ 100) |
+| 102 | current (A ÷ 1000) | | 113 | CPU temperature (°C ÷ 10) |
+| 103 | power (W ÷ 100) | | 114 | MOS/heatsink temperature (°C ÷ 10) |
+| 104 | load on/off | | 115 | child lock: in the Tuya model but **ignored by the firmware** |
+| 105 | capacity (mAh) | | 116 | test-record slot (Bat01…CDCDC05) |
+| 106 | energy (Wh ÷ 100) | | 117 | probe over-temperature (°C) |
+| 107 | screen brightness 1–9 | | 118 | probe temperature (°C ÷ 10) |
+| 108 | mode: CC CV CR CP BRT PT CRT D_C_D D_C_D_C_D | | 119 | clear capacity + energy |
+| 109 | set value (÷ 100) | | 120 | charge end current (A ÷ 100) |
+| 110 | time limit, **decimal hours** ÷ 100 (1 h 30 min = 150) | | 121 | MOS over-temperature (°C) |
+| 111 | charge full voltage (V ÷ 100) | | 122 | live refresh (1 s instead of 60 s) |
+
+**How the WiFi module connects:** the BW600's own chip talks to the Tuya module over a serial line (Tuya's MCU protocol, `55 AA 03 …`). The only network command it can send is `04`, "reset WiFi / enter pairing mode". It never handles the WiFi name, password or cloud token, because the Tuya app gives those straight to the WiFi module. So WiFi **can't be set up over USB**. A factory reset (`33`) also sends `04`, which clears the pairing.
 The BW600-DK manual also says the tester "can be connected to the computer through Bluetooth … graphics, calibration, firmware upgrades, and test cycles". That suggests the same `55 05` protocol may be available over Bluetooth as well. It hasn't been investigated yet.
