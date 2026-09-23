@@ -121,7 +121,7 @@ def cmd_raw(dev: BW600, args) -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="bw600", description="ATORCH BW600 electronic load control")
+    ap = argparse.ArgumentParser(prog="bw600", description="ATORCH BW600 electronic load control — by SQ6EMM")
     ap.add_argument("--device", help="hidraw node (default: auto-detect)")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("gui", help="start the graphical application (default)")

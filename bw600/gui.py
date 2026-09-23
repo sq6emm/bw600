@@ -83,7 +83,7 @@ def fmt(v, digits=3):
 class App(tk.Tk):
     def __init__(self, path: str | None = None):
         super().__init__()
-        self.title("ATORCH BW600 Control")
+        self.title("ATORCH BW600 Control — by SQ6EMM")
         self.geometry("1280x820")
         self.minsize(1000, 680)
         self.dev: BW600 | None = None

@@ -7,6 +7,7 @@ name = "bw600"
 version = "0.1.0"
 description = "Linux control application for the ATORCH BW600 electronic load / battery tester"
 requires-python = ">=3.10"
+authors = [{ name = "SQ6EMM" }]
 dependencies = ["matplotlib"]
 
 [project.scripts]

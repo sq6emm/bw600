@@ -1,5 +1,7 @@
 # ATORCH BW600 control for Linux
 
+by SQ6EMM
+
 Desktop application and CLI for the ATORCH BW600 electronic load and battery tester (firmware V2.0.5) over its USB-HID cable (`0483:5750`). It needs only Python 3.10+ with Tkinter and matplotlib, and talks to `/dev/hidraw*` directly.
 
 ## Setup
