@@ -50,6 +50,32 @@ class CalibrationLocked(DeviceError):
     pass
 
 
+class FactoryResetLocked(DeviceError):
+    pass
+
+
+def settings_snapshot_path(serial: str) -> str:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return os.path.join(BACKUP_DIR, f"settings-{serial or 'unknown'}-{stamp}.json")
+
+
+def save_settings_snapshot(serial: str, s: p.Settings, path: str | None = None) -> str:
+    """Write all settings (including mode and calibration, for reference) to JSON."""
+    path = path or settings_snapshot_path(serial)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    data = {k: v for k, v in s.__dict__.items() if k != "raw"}
+    data["serial"] = serial
+    data["saved"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    return path
+
+
+def load_settings_snapshot(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 BACKUP_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "bw600")
 
 
@@ -162,6 +188,7 @@ class BW600:
         self._stop_note: str | None = None
         self.alarms = AlarmMonitor(AlarmConfig.load())
         self._cal_unlocked_until = 0.0
+        self._reset_unlocked_until = 0.0
         self._cal_backup_done = False
         self.on_alarm: list[Callable[[AlarmEvent], None]] = []
 
@@ -193,6 +220,8 @@ class BW600:
             raise ValueError("Firmware-upgrade commands are blocked.")
         if len(report) >= 4 and report[:2] == p.TX_HEAD and report[3] in p.CAL_COMMANDS and not _calibration:
             raise CalibrationLocked("Calibration can only be changed with write_calibration() after unlocking.")
+        if len(report) >= 4 and report[:2] == p.TX_HEAD and report[3] == p.Cmd.FACTORY_RESET and not _calibration:
+            raise FactoryResetLocked("Factory reset can only be done with factory_reset() after unlocking.")
         with self._lock:
             self._queue.append(report)
 
@@ -224,6 +253,7 @@ class BW600:
 
     def lock_calibration(self) -> None:
         self._cal_unlocked_until = 0.0
+        self._reset_unlocked_until = 0.0
 
     def write_calibration(self, values: dict) -> None:
         """Write calibration factors {Cmd.CAL_*: value}. Requires unlock_calibration();
@@ -242,6 +272,61 @@ class BW600:
         finally:
             self.lock_calibration()
         self.request_settings()
+
+    # -- factory reset (locked by default) ---------------------------------
+    @property
+    def factory_reset_unlocked(self) -> bool:
+        return time.monotonic() < self._reset_unlocked_until
+
+    def unlock_factory_reset(self, seconds: float = 60.0) -> None:
+        self._reset_unlocked_until = time.monotonic() + seconds
+
+    def lock_factory_reset(self) -> None:
+        self._reset_unlocked_until = 0.0
+
+    def factory_reset(self) -> str:
+        """Reset all settings and calibration to factory values. Requires
+        unlock_factory_reset(); saves a settings snapshot first and returns its path."""
+        if not self.factory_reset_unlocked:
+            raise FactoryResetLocked("Factory reset is locked. Unlock it first.")
+        if self.live and self.live.running:
+            raise DeviceError("Stop the load before a factory reset.")
+        if self.settings is None:
+            raise DeviceError("Settings not read yet; refusing to reset without a backup.")
+        try:
+            path = save_settings_snapshot(self.info.serial, self.settings)
+            self.send(p.simple_frame(p.Cmd.FACTORY_RESET, self.addr), _calibration=True)
+        finally:
+            self.lock_factory_reset()
+        self.request_settings()
+        return path
+
+    def apply_settings(self, snapshot: dict) -> list[str]:
+        """Write the non-calibration settings of a snapshot back (load must be off).
+        Returns the names written. Calibration is restored separately (locked)."""
+        if self.live and self.live.running:
+            raise DeviceError("Stop the load before restoring settings.")
+        written = []
+        if "mode" in snapshot:
+            self.set_mode(int(snapshot["mode"]))
+            written.append("mode")
+        for name, cmd in p.RESTORABLE_FLOATS.items():
+            if name in snapshot and not (name == "set_value" and int(snapshot.get("mode", 0)) in p.NO_SET_VALUE_MODES):
+                self.send(p.float_frame(cmd, float(snapshot[name]), self.addr))
+                written.append(name)
+        for name, cmd in p.RESTORABLE_BYTES.items():
+            if name in snapshot:
+                self.send(p.byte_frame(cmd, p.check_byte(cmd, int(snapshot[name])), self.addr))
+                written.append(name)
+        if "language" in snapshot:
+            self.send(p.language_frame(int(snapshot["language"]), self.addr))
+            written.append("language")
+        if "time_limit_h" in snapshot:
+            for f in p.time_limit_frames(int(snapshot["time_limit_h"]), int(snapshot.get("time_limit_m", 0)), self.addr):
+                self.send(f)
+            written.append("time_limit")
+        self.request_settings()
+        return written
 
     def set_float(self, cmd: p.Cmd, value: float) -> None:
         if cmd in p.CAL_COMMANDS:
@@ -275,6 +360,9 @@ class BW600:
         self.request_settings()
 
     def simple(self, cmd: p.Cmd) -> None:
+        if cmd == p.Cmd.FACTORY_RESET:
+            self.factory_reset()
+            return
         self.send(p.simple_frame(cmd, self.addr))
         self.request_settings()
 

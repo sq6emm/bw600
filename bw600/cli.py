@@ -9,10 +9,12 @@ import sys
 import time
 
 from . import protocol as p
+from . import firmware as fw
 from .device import (BW600, DeviceError, calibration_backup_path, find_devices,
-                     load_calibration_backup)
+                     load_calibration_backup, load_settings_snapshot, save_settings_snapshot)
 
 CAL_UNLOCK_WORD = "CALIBRATE"
+RESET_UNLOCK_WORD = "RESET"
 
 FLOAT_CMDS = {
     "value": p.Cmd.SET_VALUE,
@@ -56,6 +58,7 @@ def print_status(dev: BW600) -> None:
     live = wait_for(dev, "live")
     s = wait_for(dev, "settings")
     print(f"Device        : {dev.info.name} (serial {dev.info.serial}, {dev.info.path})")
+    print(f"Firmware      : V{p.firmware_version(dev.info.name) or '?'}")
     print(f"Mode          : {p.mode_name(s.mode)}")
     print(f"State         : {'RUNNING' if live.running else 'idle'}  (status {live.status_a}/{live.status_b})")
     print(f"Voltage       : {live.voltage:.3f} V")
@@ -96,6 +99,28 @@ def confirm_calibration(args, description: str) -> bool:
         print("error: calibration can only be changed interactively", file=sys.stderr)
         return False
     return input(f"Type {CAL_UNLOCK_WORD} to write it: ").strip() == CAL_UNLOCK_WORD
+
+
+def cmd_firmware(args) -> int:
+    devs = find_devices()
+    installed = fw.parse_version(devs[0].name) if devs else None
+    print("Installed :", "V" + ".".join(map(str, installed)) if installed else "unknown (no device)")
+    try:
+        files = fw.fetch_available()
+    except OSError as e:
+        print(f"error: cannot reach {fw.PAGE_URL}: {e}", file=sys.stderr)
+        return 2
+    for f in files:
+        print(f"Published : V{f.version_str}  {f.name}")
+    if files and installed:
+        print("Status    :", "up to date" if installed >= files[0].version else f"V{files[0].version_str} available")
+    if args.download and files:
+        import os
+        dest = os.path.join(args.download, f"BW600-firmware-V{files[0].version_str}.zip")
+        fw.download(files[0], dest)
+        print("Downloaded:", dest)
+    print("(Flashing is done with the ATORCH Windows tool; this program does not flash firmware.)")
+    return 0
 
 
 def cmd_monitor(dev: BW600, args) -> None:
@@ -180,7 +205,13 @@ def main(argv=None) -> int:
     c.add_argument("--unlock-calibration", action="store_true", help="required for restore")
     a = sub.add_parser("action", help="clear / zero / factory-reset")
     a.add_argument("name", choices=sorted(ACTIONS))
-    a.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    a.add_argument("--yes", action="store_true", help="do not ask for confirmation (not for factory-reset)")
+    a.add_argument("--unlock-factory-reset", action="store_true", help="required for factory-reset")
+    st = sub.add_parser("settings", help="save all settings to a JSON file, or write them back")
+    st.add_argument("action", choices=["save", "restore"])
+    st.add_argument("file", nargs="?", help="JSON file (default for save: ~/.config/bw600/settings-<serial>-<time>.json)")
+    fwp = sub.add_parser("firmware", help="show the installed firmware version and check ATORCH's site for updates")
+    fwp.add_argument("--download", metavar="DIR", help="download the newest firmware file into DIR")
     r = sub.add_parser("raw", help="dump raw HID frames (debugging)")
     r.add_argument("--seconds", type=float, default=5)
     r.add_argument("--tx", action="store_true", help="also show transmitted frames")
@@ -191,6 +222,8 @@ def main(argv=None) -> int:
         from .gui import main as gui_main
         gui_main(args.device)
         return 0
+    if args.cmd == "firmware":
+        return cmd_firmware(args)
     if args.cmd == "list":
         devs = find_devices()
         for d in devs:
@@ -260,6 +293,36 @@ def main(argv=None) -> int:
                     dev.write_calibration({cmd: backup[field] for cmd, field in p.CAL_FIELDS.items()})
                     time.sleep(1.0)
                     print("restored")
+            elif args.cmd == "settings":
+                s = wait_for(dev, "settings")
+                if args.action == "save":
+                    print("saved to", save_settings_snapshot(dev.info.serial, s, args.file))
+                else:
+                    if not args.file:
+                        print("error: give the snapshot file to restore", file=sys.stderr)
+                        return 2
+                    snap = load_settings_snapshot(args.file)
+                    wait_for(dev, "live")
+                    written = dev.apply_settings(snap)
+                    time.sleep(1.5)
+                    print(f"restored {len(written)} settings (calibration unchanged)")
+            elif args.cmd == "action" and args.name == "factory-reset":
+                if not args.unlock_factory_reset:
+                    print("error: factory reset is locked; add --unlock-factory-reset", file=sys.stderr)
+                    return 1
+                if not sys.stdin.isatty():
+                    print("error: factory reset can only be done interactively", file=sys.stderr)
+                    return 1
+                wait_for(dev, "settings")
+                print("This resets ALL settings and the calibration to factory values.")
+                if input(f"Type {RESET_UNLOCK_WORD} to continue: ").strip() != RESET_UNLOCK_WORD:
+                    print("nothing was reset")
+                    return 1
+                wait_for(dev, "live")
+                dev.unlock_factory_reset(30)
+                path = dev.factory_reset()
+                time.sleep(1.0)
+                print(f"factory reset done; previous settings saved to {path}")
             elif args.cmd == "action":
                 if not args.yes and input(f"Really '{args.name}'? [y/N] ").lower() != "y":
                     return 1

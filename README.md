@@ -29,7 +29,10 @@ pip install --user .          # optional: installs the `bw600` command
 - **System:**
   - working and standby brightness, and standby time
   - language
-  - clearing the capacity counters, zeroing the readings, and factory reset
+  - clearing the capacity counters and zeroing the readings
+  - **factory reset, locked**: you type `RESET` and then confirm. It resets all settings *and* the calibration (to the factory calibration stored in flash), so a snapshot of your settings is saved first
+  - saving settings to a JSON snapshot, and restoring one (everything except calibration)
+  - the firmware version, a check of ATORCH's download page for newer firmware, and a download button
 - **Stop reasons:** when the load switches itself off, a banner and popup say why, for example "Cut-off voltage reached: 8.941 V ≤ 9 V". The BW600 doesn't report a reason, so the app infers it from the last readings and your limits. It recognises:
   - the cut-off voltage
   - the time limit
@@ -59,6 +62,10 @@ bw600 set time 1:30                # time limit h:mm
 bw600 set brightness 9             # 0..9; also: standby-brightness (0..9) standby-time language
 bw600 set cycles 10                # cycles for the charge/discharge cycle test
 bw600 action clear                 # also: zero, factory-reset
+bw600 action factory-reset --unlock-factory-reset   # asks you to type RESET; saves a snapshot first
+bw600 settings save [FILE]         # snapshot of all settings (default: ~/.config/bw600/)
+bw600 settings restore FILE        # write a snapshot back (calibration excluded)
+bw600 firmware [--download DIR]    # installed version vs. versions published by ATORCH
 bw600 calibration show             # factors on the device + the saved backup
 bw600 set cal-voltage 1.0017 --unlock-calibration   # asks you to type CALIBRATE
 bw600 calibration restore --unlock-calibration      # write the backup back
@@ -117,3 +124,7 @@ The vendor software never sends a mode command, so I read the firmware instead. 
 - **Application area:** encrypted in 32-byte blocks with the chip key `0x8D07` XOR (offset ÷ 4), where the offset is counted from the start of the application area.
 
 Once decrypted, the application runs on JieLi's q32s CPU and can be disassembled with the `objdump` in JieLi's Linux toolchain. The command dispatcher is a `tbh` jump table covering commands 0x03 to 0x51. Commands 0x47 to 0x50 write 0 to 9 to the mode byte and switch to that mode's screen. All ten mode commands were then checked on the device.
+
+### Firmware updates
+
+The firmware version is part of the USB product string (`ATORCH BW600 V2.0.5`). `bw600 firmware` and the System tab compare it with the files on ATORCH's BW600 page and can download the newest one. This app doesn't flash firmware: use ATORCH's Windows tool for that. The update protocol is only partly worked out (the vendor tool sends `55 05 09 02` to restart into the updater, then transfers the file in `CC …` packets), and a failed flash could leave the device unusable.

@@ -5,7 +5,9 @@ from __future__ import annotations
 import collections
 import csv
 import datetime as dt
+import os
 import queue
+import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -18,8 +20,13 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from . import protocol as p  # noqa: E402
 from .alarms import AlarmConfig, AlarmEvent  # noqa: E402
-from .device import (BW600, CalibrationLocked, DeviceError, calibration_backup_path,  # noqa: E402
-                     find_devices, load_calibration_backup)
+from . import firmware as fw  # noqa: E402
+from .device import (BACKUP_DIR, BW600, CalibrationLocked, DeviceError, FactoryResetLocked,  # noqa: E402
+                     calibration_backup_path, find_devices, load_calibration_backup,
+                     load_settings_snapshot, save_settings_snapshot)
+
+RESET_UNLOCK_WORD = "RESET"
+FW_NOTES = {"定制取消长按+和-": "customised: long-press on + and − disabled"}
 
 CAL_UNLOCK_WORD = "CALIBRATE"
 CAL_UNLOCK_SECONDS = 120
@@ -368,8 +375,29 @@ class App(tk.Tk):
                    command=lambda: self.confirm_simple(p.Cmd.CLEAR_CAPACITY, "Clear the accumulated capacity (mAh) and energy (Wh)?")).pack(side="left", padx=4)
         ttk.Button(act, text="Zero readings (data zero)",
                    command=lambda: self.confirm_simple(p.Cmd.DATA_ZERO, "Zero the measurement offsets? Do this with nothing connected to the input.")).pack(side="left", padx=4)
-        ttk.Button(act, text="Factory reset", style="Danger.TButton",
-                   command=lambda: self.confirm_simple(p.Cmd.FACTORY_RESET, "Restore ALL device settings to factory defaults?")).pack(side="left", padx=4)
+        ttk.Button(act, text="Factory reset…", style="Danger.TButton",
+                   command=self.factory_reset_dialog).pack(side="left", padx=4)
+
+        snap = ttk.LabelFrame(frame, text="Settings backup", padding=10)
+        snap.pack(fill="x", pady=10)
+        ttk.Button(snap, text="Save settings…", command=self.save_snapshot).pack(side="left", padx=4)
+        ttk.Button(snap, text="Restore settings from snapshot…", command=self.restore_snapshot).pack(side="left", padx=4)
+        ttk.Label(snap, style="Cap.TLabel", wraplength=420, justify="left",
+                  text="A snapshot is saved automatically before every factory reset. Restoring writes all "
+                       "settings except calibration (restore that on the Calibration tab).").pack(side="left", padx=8)
+
+        fwf = ttk.LabelFrame(frame, text="Firmware", padding=10)
+        fwf.pack(fill="x")
+        self.fw_var = tk.StringVar(value="Installed: —")
+        ttk.Label(fwf, textvariable=self.fw_var).pack(anchor="w")
+        row = ttk.Frame(fwf)
+        row.pack(fill="x", pady=(6, 0))
+        ttk.Button(row, text="Check for update", command=self.check_firmware).pack(side="left", padx=(0, 4))
+        self.fw_dl_btn = ttk.Button(row, text="Download latest…", command=self.download_firmware, state="disabled")
+        self.fw_dl_btn.pack(side="left", padx=4)
+        self.fw_check_var = tk.StringVar(value="")
+        ttk.Label(fwf, textvariable=self.fw_check_var, style="Cap.TLabel", justify="left").pack(anchor="w", pady=(6, 0))
+        self.fw_files: list = []
 
     def _build_calibration(self, nb):
         frame = ttk.Frame(nb, padding=12)
@@ -442,6 +470,8 @@ class App(tk.Tk):
         self.settings_loaded = False
         info = self.dev.info
         self.info_var.set(f"Device: {info.name}   serial: {info.serial}   node: {info.path}")
+        version = p.firmware_version(info.name)
+        self.fw_var.set(f"Installed: V{version}" if version else f"Installed: unknown ({info.name})")
 
     def reconnect(self):
         if self.dev:
@@ -594,6 +624,120 @@ class App(tk.Tk):
         except DeviceError as e:
             messagebox.showwarning("BW600", str(e))
 
+    # ------------------------------------------------------ factory reset
+    def factory_reset_dialog(self):
+        if not self._need_dev():
+            return
+        word = simpledialog.askstring(
+            "Factory reset",
+            "This resets ALL settings to factory defaults and calibration to the factory values.\n"
+            "A snapshot of the current settings is saved first.\n\n"
+            f"Type {RESET_UNLOCK_WORD} to continue:", parent=self)
+        if word is None:
+            return
+        if word.strip() != RESET_UNLOCK_WORD:
+            messagebox.showerror("BW600", "Wrong word — nothing was reset.")
+            return
+        if not messagebox.askyesno("Factory reset", "Really reset the BW600 to factory settings?",
+                                   icon="warning", default="no"):
+            return
+        self.dev.unlock_factory_reset(30)
+        try:
+            path = self.dev.factory_reset()
+        except DeviceError as e:
+            messagebox.showerror("BW600", str(e))
+            return
+        self.settings_loaded = False
+        messagebox.showinfo("BW600", f"Factory reset done.\n\nPrevious settings saved to:\n{path}")
+
+    def save_snapshot(self):
+        if not self._need_dev() or not self.dev.settings:
+            return
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        path = filedialog.asksaveasfilename(initialdir=BACKUP_DIR, defaultextension=".json",
+                                            initialfile=f"settings-{self.dev.info.serial}-{dt.datetime.now():%Y%m%d-%H%M%S}.json",
+                                            filetypes=[("JSON", "*.json")])
+        if path:
+            save_settings_snapshot(self.dev.info.serial, self.dev.settings, path)
+
+    def restore_snapshot(self):
+        if not self._need_dev():
+            return
+        path = filedialog.askopenfilename(initialdir=BACKUP_DIR, filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+        try:
+            snap = load_settings_snapshot(path)
+        except (OSError, ValueError) as e:
+            messagebox.showerror("BW600", f"Cannot read snapshot: {e}")
+            return
+        if not messagebox.askyesno("Restore settings",
+                                   f"Write the settings saved {snap.get('saved', '?')} "
+                                   f"(mode: {p.mode_name(snap.get('mode'))}) to the device?\n"
+                                   "Calibration is not changed."):
+            return
+        try:
+            written = self.dev.apply_settings(snap)
+        except (DeviceError, ValueError) as e:
+            messagebox.showerror("BW600", str(e))
+            return
+        self.settings_loaded = False
+        messagebox.showinfo("BW600", f"Restored {len(written)} settings.")
+
+    # ------------------------------------------------------ firmware
+    def check_firmware(self):
+        self.fw_check_var.set("Checking ATORCH website…")
+
+        def work():
+            try:
+                files = fw.fetch_available()
+                self.events.put(("fw", files))
+            except Exception as e:  # network errors
+                self.events.put(("fw", e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_firmware_list(self, result):
+        if isinstance(result, Exception):
+            self.fw_check_var.set(f"Could not check: {result}")
+            return
+        self.fw_files = result
+        if not result:
+            self.fw_check_var.set("No BW600 firmware found on the ATORCH page.")
+            return
+        installed = fw.parse_version(self.dev.info.name) if self.dev else None
+        latest = result[0].version
+        lines = []
+        for f in result:
+            note = next((v for k, v in FW_NOTES.items() if k in f.name), "")
+            lines.append(f"  V{f.version_str}  {f.name}" + (f"  ({note})" if note else ""))
+        if installed and installed >= latest:
+            head = f"Up to date — V{'.'.join(map(str, installed))} is the newest version published."
+        elif installed:
+            head = f"Newer firmware available: V{result[0].version_str}."
+        else:
+            head = f"Latest published: V{result[0].version_str}."
+        self.fw_check_var.set(head + "\nPublished files:\n" + "\n".join(lines) +
+                              "\nFlashing is done with the ATORCH Windows tool; this app does not flash firmware.")
+        self.fw_dl_btn.state(["!disabled"])
+
+    def download_firmware(self):
+        if not self.fw_files:
+            return
+        f = self.fw_files[0]
+        path = filedialog.asksaveasfilename(initialfile=f"BW600-firmware-V{f.version_str}.zip",
+                                            filetypes=[("ZIP", "*.zip")])
+        if not path:
+            return
+        self.fw_check_var.set(self.fw_check_var.get() + f"\nDownloading {f.name}…")
+
+        def work():
+            try:
+                fw.download(f, path)
+                self.events.put(("fwdl", f"Saved to {path}"))
+            except Exception as e:
+                self.events.put(("fwdl", f"Download failed: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
     def confirm_simple(self, cmd, question):
         if self._need_dev() and messagebox.askyesno("BW600", question):
             self.dev.simple(cmd)
@@ -634,6 +778,10 @@ class App(tk.Tk):
                     self.on_stop(payload)
                 elif kind == "alarm":
                     self.on_alarm(payload)
+                elif kind == "fw":
+                    self.on_firmware_list(payload)
+                elif kind == "fwdl":
+                    self.fw_check_var.set(self.fw_check_var.get().rsplit("\n", 1)[0] + "\n" + payload)
                 elif kind == "raw":
                     d, data = payload
                     self.console.insert("end", f"{dt.datetime.now():%H:%M:%S.%f}"[:-3] + f" {d} {p.hexdump(data)}\n")

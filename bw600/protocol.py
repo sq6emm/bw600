@@ -92,6 +92,25 @@ def check_calibration(value: float) -> float:
     return value
 
 
+# Settings restored by BW600.apply_settings() (calibration is separate and locked).
+RESTORABLE_FLOATS = {
+    "set_value": Cmd.SET_VALUE, "cutoff_voltage": Cmd.CUTOFF_VOLTAGE, "full_voltage": Cmd.FULL_VOLTAGE,
+    "full_current": Cmd.FULL_CURRENT, "over_current": Cmd.OVER_CURRENT, "over_power": Cmd.OVER_POWER,
+    "ntc_over_temp": Cmd.NTC_OVER_TEMP, "mos_over_temp": Cmd.MOS_OVER_TEMP,
+}
+RESTORABLE_BYTES = {
+    "work_brightness": Cmd.WORK_BRIGHTNESS, "standby_brightness": Cmd.STANDBY_BRIGHTNESS,
+    "standby_time": Cmd.STANDBY_TIME, "cycle_count": Cmd.CYCLE_COUNT,
+}
+
+
+def firmware_version(device_name: str) -> str | None:
+    """'APP ATORCH BW600 V2.0.5' -> '2.0.5' (the USB product string carries the version)."""
+    import re
+    m = re.search(r"V(\d+(?:\.\d+)+)", device_name or "")
+    return m.group(1) if m else None
+
+
 # Commands that must never be sent from this tool (firmware upgrade path).
 FORBIDDEN_RAW = {0x02}
 

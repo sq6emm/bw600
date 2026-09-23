@@ -247,3 +247,45 @@ def test_calibration_backup_saved_once(dev, tmp_path):
     d._save_calibration_backup("123", s)            # existing backup is never overwritten
     b = d.load_calibration_backup("123")
     assert b["cal_voltage"] == pytest.approx(1.0016776) and b["cal_current"] == pytest.approx(0.9145828)
+
+
+def test_factory_reset_locked(dev):
+    from bw600.device import FactoryResetLocked
+    dev.settings = p.parse_settings(SETTINGS)
+    for attempt in (lambda: dev.simple(p.Cmd.FACTORY_RESET),
+                    lambda: dev.send(p.simple_frame(p.Cmd.FACTORY_RESET)),
+                    lambda: dev.factory_reset()):
+        with pytest.raises(FactoryResetLocked):
+            attempt()
+    assert not [r for r in dev._queue if r[3] == p.Cmd.FACTORY_RESET]
+
+
+def test_factory_reset_saves_snapshot_and_relocks(dev, tmp_path):
+    import json
+    dev.settings = p.parse_settings(SETTINGS)
+    dev.unlock_factory_reset(30)
+    path = dev.factory_reset()
+    assert [r for r in dev._queue if r[3] == p.Cmd.FACTORY_RESET]
+    assert not dev.factory_reset_unlocked
+    snap = json.load(open(path))
+    assert snap["cutoff_voltage"] == 3.0 and snap["over_power"] == 610.0 and snap["cycle_count"] == 10
+
+
+def test_apply_settings_skips_calibration(dev):
+    snap = {k: v for k, v in p.parse_settings(SETTINGS).__dict__.items() if k != "raw"}
+    written = dev.apply_settings(snap)
+    assert "cutoff_voltage" in written and "mode" in written
+    assert not [r for r in dev._queue if r[3] in p.CAL_COMMANDS | {p.Cmd.FACTORY_RESET}]
+
+
+def test_firmware_version_and_page_parsing():
+    from bw600 import firmware as fw
+    assert p.firmware_version("APP ATORCH BW600 V2.0.5") == "2.0.5"
+    page = ('<a href="/../../upload/file/1/a.zip">BW600-6321-APP-2-0-3.zip</a>'
+            '<a href="/../../upload/file/2/b.zip">BW600-6321-APP-2-0-5-UP-2026.07.08.zip</a>'
+            '<a href="/../../upload/file/4/d.zip">BW600-APP-2-0-5(定制取消长按+和-).zip</a>'
+            '<a href="/../../upload/file/3/c.zip">02-BW150_PC_Application_V1.0.8.zip</a>')
+    files = fw.parse_page(page)
+    assert [f.version for f in files] == [(2, 0, 5), (2, 0, 5), (2, 0, 3)]
+    assert files[0].url == "http://en.atorch.cn/upload/file/2/b.zip"      # standard build preferred
+    assert files[1].customised and not files[0].customised
