@@ -135,6 +135,8 @@ The firmware version is part of the USB product string (`ATORCH BW600 V2.0.5`). 
 
 The BW600-DK's Tuya WiFi module can be used **directly over your local network**. Once set up, nothing goes through the cloud.
 
+![WiFi mode: 5 A discharge controlled over the local network; USB-only settings are greyed out](docs/screenshot-wifi.png)
+
 **One-time setup:**
 
 1. Pair the tester with the **Smart Life** / Tuya app on a **2.4 GHz** network. It advertises as `TUYA_` over Bluetooth until it's paired. If it won't pair, use **WIFI Reset** in its menu.
