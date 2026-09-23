@@ -176,6 +176,7 @@ def test_mode_frames():
     assert p.mode_frame(p.Mode.CV) == bytes.fromhex("55050148 00000000 EEFF")
     assert p.mode_frame(p.Mode.CYCLE_TEST) == bytes.fromhex("55050150 00000000 EEFF")
     assert {p.MODE_KEYS[k] for k in p.MODE_KEYS} == set(p.Mode)
+    assert p.MODE_KEYS["brt"] == p.MODE_KEYS["ir"] and p.MODE_KEYS["cdxn"] == p.Mode.CYCLE_TEST
     with pytest.raises(ValueError):
         p.mode_frame(10)
 
@@ -288,4 +289,5 @@ def test_firmware_version_and_page_parsing():
     files = fw.parse_page(page)
     assert [f.version for f in files] == [(2, 0, 5), (2, 0, 5), (2, 0, 3)]
     assert files[0].url == "http://en.atorch.cn/upload/file/2/b.zip"      # standard build preferred
+    assert files[0].page == "BW600"
     assert files[1].customised and not files[0].customised

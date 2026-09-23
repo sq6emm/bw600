@@ -106,12 +106,14 @@ def cmd_firmware(args) -> int:
     installed = fw.parse_version(devs[0].name) if devs else None
     print("Installed :", "V" + ".".join(map(str, installed)) if installed else "unknown (no device)")
     try:
-        files = fw.fetch_available()
+        files, failed = fw.fetch_available()
     except OSError as e:
-        print(f"error: cannot reach {fw.PAGE_URL}: {e}", file=sys.stderr)
+        print(f"error: cannot reach the ATORCH website: {e}", file=sys.stderr)
         return 2
     for f in files:
-        print(f"Published : V{f.version_str}  {f.name}")
+        print(f"Published : V{f.version_str}  {f.name}  [{f.page} page, {f.date[:4]}-{f.date[4:6]}-{f.date[6:]}]")
+    for page in failed:
+        print(f"Warning   : could not read the {page} page ({fw.PAGES[page]})")
     if files and installed:
         print("Status    :", "up to date" if installed >= files[0].version else f"V{files[0].version_str} available")
     if args.download and files:
@@ -194,8 +196,8 @@ def main(argv=None) -> int:
     sub.add_parser("stop", help="switch the load OFF")
     md = sub.add_parser("mode", help="select the operating mode (load must be off)")
     md.add_argument("name", choices=list(p.MODE_KEYS),
-                    help="cc cv cr cp | ir (internal resistance) psu (power supply test) cable | "
-                         "cdc (charge-discharge-charge) cdcdc cycle")
+                    help="cc cv cr cp | brt/ir (battery internal resistance) pt/psu (power supply test) "
+                         "ct/cable | cdc (charge-discharge-charge) cdcdc | cdxn/cycle")
     s = sub.add_parser("set", help="change a setting")
     s.add_argument("name", choices=sorted(list(FLOAT_CMDS) + list(BYTE_CMDS) + ["time"]))
     s.add_argument("value", help="number, or H:MM for time")

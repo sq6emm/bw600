@@ -1,10 +1,10 @@
-# ATORCH BW600 control for Linux
+# ATORCH BW600 / BW600-DK control for Linux
 
 by SQ6EMM
 
 ![BW600 control app: a 5 A discharge stopped at the 9 V cut-off](docs/screenshot.png)
 
-Desktop application and CLI for the ATORCH BW600 electronic load and battery tester (firmware V2.0.5) over its USB-HID cable (`0483:5750`). It needs only Python 3.10+ with Tkinter and matplotlib, and talks to `/dev/hidraw*` directly.
+Desktop application and CLI for the ATORCH BW600 and BW600-DK (WiFi/Bluetooth) electronic load and battery tester (firmware V2.0.5), over its USB-HID cable (`0483:5750`). Both models report themselves over USB as `ATORCH BW600` and run byte-identical firmware. This app was developed and tested on a BW600-DK. It needs only Python 3.10+ with Tkinter and matplotlib, and talks to `/dev/hidraw*` directly.
 
 ## Setup
 
@@ -55,7 +55,7 @@ bw600 monitor --csv log.csv        # stream readings, report stops with their re
 bw600 monitor --max-voltage 14.6 --min-voltage 10.5 --max-current 5   # with alarms
                                    # (add --warn-only to keep the load running)
 bw600 start | stop                 # load on/off
-bw600 mode cc                      # cc cv cr cp ir psu cable cdc cdcdc cycle (load off)
+bw600 mode cc                      # cc cv cr cp brt pt ct cdc cdcdc cdxn (load off)
 bw600 set value 2.5                # setpoint (A / V / Ω / W per mode)
 bw600 set cutoff 3.0               # also: full-voltage full-current ocp opp ntc-otp mos-otp
 bw600 set time 1:30                # time limit h:mm
@@ -127,10 +127,12 @@ Once decrypted, the application runs on JieLi's q32s CPU and can be disassembled
 
 ### Firmware updates
 
-Copies of every file ATORCH publishes for the BW600 (PC software, its manual, and the firmware 2.0.3, 2.0.5 and 2.0.5-custom) are in [`vendor/`](vendor/), stored unmodified with their source URLs and SHA-256 checksums.
+Copies of every file ATORCH publishes for the BW600 and the BW600-DK (PC software, the BW600-DK user manual, the PC-software manual, and the firmware 2.0.3, 2.0.5 and 2.0.5-custom) are in [`vendor/`](vendor/), stored unmodified with their source URLs and SHA-256 checksums. The update check reads both vendor pages.
 
 The firmware version is part of the USB product string (`ATORCH BW600 V2.0.5`). `bw600 firmware` and the System tab compare it with the files on ATORCH's BW600 page and can download the newest one. This app doesn't flash firmware: use ATORCH's Windows tool for that. The update protocol is only partly worked out (the vendor tool sends `55 05 09 02` to restart into the updater, then transfers the file in `CC …` packets), and a failed flash could leave the device unusable.
 
 ### WiFi / Bluetooth models
 
-The WiFi version has a Tuya WiFi module (Smart Life / Tuya app). The BW600's own chip talks to that module over a serial line using Tuya's MCU protocol (`55 AA 03 …`). The only network command it can send is `04`, "reset WiFi / enter pairing mode". It never handles the WiFi name, password or cloud token, because the Tuya app gives those straight to the WiFi module. So WiFi **can't be set up over USB**: pair the device with the Tuya / Smart Life app, or use **WIFI Reset** in the device's menu to re-pair it. A factory reset (`33`) also sends `04`.
+The BW600-DK (the WiFi version) has a Tuya WiFi module (Smart Life / Tuya app). The BW600's own chip talks to that module over a serial line using Tuya's MCU protocol (`55 AA 03 …`). The only network command it can send is `04`, "reset WiFi / enter pairing mode". It never handles the WiFi name, password or cloud token, because the Tuya app gives those straight to the WiFi module. So WiFi **can't be set up over USB**: pair the device with the Tuya / Smart Life app, or use **WIFI Reset** in the device's menu to re-pair it. A factory reset (`33`) also sends `04`.
+
+The BW600-DK manual also says the tester "can be connected to the computer through Bluetooth … graphics, calibration, firmware upgrades, and test cycles". That suggests the same `55 05` protocol may be available over Bluetooth as well. It hasn't been investigated yet.

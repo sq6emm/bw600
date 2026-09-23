@@ -691,8 +691,7 @@ class App(tk.Tk):
 
         def work():
             try:
-                files = fw.fetch_available()
-                self.events.put(("fw", files))
+                self.events.put(("fw", fw.fetch_available()))
             except Exception as e:  # network errors
                 self.events.put(("fw", e))
         threading.Thread(target=work, daemon=True).start()
@@ -701,7 +700,9 @@ class App(tk.Tk):
         if isinstance(result, Exception):
             self.fw_check_var.set(f"Could not check: {result}")
             return
+        result, failed = result
         self.fw_files = result
+        warn = "".join(f"\n⚠ Could not read the {p} page." for p in failed)
         if not result:
             self.fw_check_var.set("No BW600 firmware found on the ATORCH page.")
             return
@@ -710,7 +711,8 @@ class App(tk.Tk):
         lines = []
         for f in result:
             note = next((v for k, v in FW_NOTES.items() if k in f.name), "")
-            lines.append(f"  V{f.version_str}  {f.name}" + (f"  ({note})" if note else ""))
+            lines.append(f"  V{f.version_str}  {f.name}  [{f.page}, {f.date[:4]}-{f.date[4:6]}-{f.date[6:]}]"
+                         + (f"  ({note})" if note else ""))
         if installed and installed >= latest:
             head = f"Up to date — V{'.'.join(map(str, installed))} is the newest version published."
         elif installed:
@@ -718,7 +720,7 @@ class App(tk.Tk):
         else:
             head = f"Latest published: V{result[0].version_str}."
         self.fw_check_var.set(head + "\nPublished files:\n" + "\n".join(lines) +
-                              "\nFlashing is done with the ATORCH Windows tool; this app does not flash firmware.")
+                              "\nFlashing is done with the ATORCH Windows tool; this app does not flash firmware." + warn)
         self.fw_dl_btn.state(["!disabled"])
 
     def download_firmware(self):

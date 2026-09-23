@@ -133,19 +133,20 @@ MODE_NAMES = {
     Mode.CV: "Constant voltage (CV)",
     Mode.CR: "Constant resistance (CR)",
     Mode.CP: "Constant power (CP)",
-    Mode.INTERNAL_RESISTANCE: "Internal resistance test",
-    Mode.POWER_SUPPLY_TEST: "Power supply test",
-    Mode.CABLE_TEST: "Cable test",
-    Mode.CHARGE_DISCHARGE_CHARGE: "Charge-discharge-charge",
+    Mode.INTERNAL_RESISTANCE: "Battery internal resistance (BRT)",
+    Mode.POWER_SUPPLY_TEST: "Power supply test (PT)",
+    Mode.CABLE_TEST: "Cable test (CT)",
+    Mode.CHARGE_DISCHARGE_CHARGE: "Charge-discharge-charge (CDC)",
     Mode.CDCDC: "Charge-discharge x2-charge",
-    Mode.CYCLE_TEST: "Charge/discharge cycle test",
+    Mode.CYCLE_TEST: "Charge/discharge cycles (CDxn)",
 }
 
 # Short names for the command line.
 MODE_KEYS = {
     "cc": Mode.CC, "cv": Mode.CV, "cr": Mode.CR, "cp": Mode.CP,
-    "ir": Mode.INTERNAL_RESISTANCE, "psu": Mode.POWER_SUPPLY_TEST, "cable": Mode.CABLE_TEST,
-    "cdc": Mode.CHARGE_DISCHARGE_CHARGE, "cdcdc": Mode.CDCDC, "cycle": Mode.CYCLE_TEST,
+    "ir": Mode.INTERNAL_RESISTANCE, "brt": Mode.INTERNAL_RESISTANCE,
+    "psu": Mode.POWER_SUPPLY_TEST, "pt": Mode.POWER_SUPPLY_TEST, "cable": Mode.CABLE_TEST, "ct": Mode.CABLE_TEST,
+    "cdc": Mode.CHARGE_DISCHARGE_CHARGE, "cdcdc": Mode.CDCDC, "cycle": Mode.CYCLE_TEST, "cdxn": Mode.CYCLE_TEST,
 }
 
 # Modes whose settings reply carries no meaningful set value.
