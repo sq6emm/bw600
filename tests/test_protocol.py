@@ -84,3 +84,57 @@ def test_parse_running_discharge():
     assert live.voltage == pytest.approx(11.759)
     assert live.power == pytest.approx(11.758)
     assert live.fan == 30.0
+
+
+def _live(v, i, running=True, **kw):
+    return p.Live(voltage=v, current=-i, power=v * i, running=running, flags=0x80, **kw)
+
+
+def _settings(**kw):
+    s = p.parse_settings(SETTINGS)
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s
+
+
+def test_stop_reason_cutoff():
+    # Real case: 5 A discharge, 9 V cut-off, voltage 9.003 V then the device stopped.
+    window = [_live(9.060, 5.0), _live(9.033, 5.0), _live(9.003, 5.0), _live(10.422, 0.072)]
+    ev = p.infer_stop_reason(window, _settings(cutoff_voltage=9.0), run_seconds=60)
+    assert ev.reason == "cutoff" and ev.inferred
+
+
+def test_stop_reason_user_and_unknown():
+    s = _settings()
+    assert p.infer_stop_reason([_live(12.0, 1.0)], s, requested=True).reason == "user"
+    assert p.infer_stop_reason([_live(11.8, 1.0)], s, run_seconds=30).reason == "device"
+
+
+def test_stop_reason_time_limit_and_temps():
+    s = _settings(time_limit_h=0, time_limit_m=1)
+    assert p.infer_stop_reason([_live(11.8, 1.0)], s, run_seconds=60).reason == "time"
+    hot = [_live(11.8, 1.0, mos_temp=120.4)]
+    assert p.infer_stop_reason(hot, _settings(), run_seconds=10).reason == "mos_otp"
+
+
+def test_alarm_debounce_and_rearm():
+    from bw600.alarms import AlarmConfig, AlarmMonitor
+    mon = AlarmMonitor(AlarmConfig(over_voltage_enabled=True, over_voltage=12.0,
+                                   over_current_enabled=True, over_current=4.0))
+    assert mon.check(_live(12.5, 1.0)) == []            # first reading over: debounced
+    ev = mon.check(_live(12.6, 1.0))
+    assert [e.kind for e in ev] == ["over_voltage"]
+    assert mon.check(_live(12.7, 1.0)) == []            # latched: no repeat
+    assert mon.check(_live(11.9, 1.0)) == []            # within hysteresis: still latched
+    mon.check(_live(11.5, 1.0))                         # re-armed
+    mon.check(_live(12.5, 1.0))
+    assert [e.kind for e in mon.check(_live(12.5, 1.0))] == ["over_voltage"]
+    mon.check(_live(10.0, 5.0))
+    assert [e.kind for e in mon.check(_live(10.0, 5.0))] == ["over_current"]
+
+
+def test_alarm_disabled():
+    from bw600.alarms import AlarmConfig, AlarmMonitor
+    mon = AlarmMonitor(AlarmConfig())
+    for _ in range(5):
+        assert mon.check(_live(50.0, 50.0)) == []

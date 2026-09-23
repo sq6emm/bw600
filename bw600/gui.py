@@ -17,6 +17,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
 from . import protocol as p  # noqa: E402
+from .alarms import AlarmConfig, AlarmEvent  # noqa: E402
 from .device import BW600, DeviceError, find_devices  # noqa: E402
 
 REFRESH_MS = 200
@@ -84,7 +85,7 @@ class App(tk.Tk):
     def __init__(self, path: str | None = None):
         super().__init__()
         self.title("ATORCH BW600 Control — by SQ6EMM")
-        self.geometry("1280x820")
+        self.geometry("1280x870")
         self.minsize(1000, 680)
         self.dev: BW600 | None = None
         self.path = path
@@ -129,7 +130,13 @@ class App(tk.Tk):
         self.mode_var = tk.StringVar(value="Mode: ?")
         ttk.Label(top, textvariable=self.mode_var, style="Status.TLabel").pack(side="right", padx=20)
 
+        self.stop_var = tk.StringVar(value="")
+        self.stop_banner = tk.Label(self, textvariable=self.stop_var, anchor="w", padx=10, pady=4,
+                                    bg="#fff3cd", fg="#664d03", font=("DejaVu Sans", 10, "bold"))
+        self.stop_banner.bind("<Button-1>", lambda _e: self.stop_banner.pack_forget())
+
         body = ttk.Frame(self, padding=(10, 0, 10, 10))
+        self.body = body
         body.pack(fill="both", expand=True)
 
         left = ttk.Frame(body)
@@ -266,6 +273,34 @@ class App(tk.Tk):
         g.pack(fill="x")
         for i, (label, cmd, unit, key) in enumerate(FLOAT_SETTINGS_PROTECT):
             self._setting_row(g, i, label, unit, key, lambda c=cmd, k=key: self.apply_float(c, k))
+        ttk.Label(frame, style="Cap.TLabel", wraplength=700, justify="left",
+                  text="These limits are enforced by the BW600 itself to protect the load.").pack(fill="x", pady=(4, 12))
+
+        cfg = AlarmConfig.load()
+        a = ttk.LabelFrame(frame, text="Application alarms (checked by this program)", padding=10)
+        a.pack(fill="x")
+        self.alarm_vars = {
+            "over_voltage_enabled": tk.BooleanVar(value=cfg.over_voltage_enabled),
+            "over_voltage": tk.StringVar(value=f"{cfg.over_voltage:g}"),
+            "over_current_enabled": tk.BooleanVar(value=cfg.over_current_enabled),
+            "over_current": tk.StringVar(value=f"{cfg.over_current:g}"),
+            "stop_load": tk.BooleanVar(value=cfg.stop_load),
+        }
+        for row, (key, label, unit) in enumerate((("over_voltage", "Over-voltage alarm above", "V"),
+                                                   ("over_current", "Over-current alarm above", "A"))):
+            ttk.Checkbutton(a, text=label, variable=self.alarm_vars[key + "_enabled"]).grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Entry(a, textvariable=self.alarm_vars[key], width=10).grid(row=row, column=1, padx=6)
+            ttk.Label(a, text=unit).grid(row=row, column=2, sticky="w")
+        ttk.Checkbutton(a, text="Switch the load OFF when an alarm trips",
+                        variable=self.alarm_vars["stop_load"]).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Button(a, text="Apply & save", command=self.apply_alarms).grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.alarm_state_var = tk.StringVar(value="")
+        ttk.Label(a, textvariable=self.alarm_state_var, style="Cap.TLabel").grid(row=3, column=1, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(frame, style="Cap.TLabel", wraplength=700, justify="left",
+                  text="Checked on every reading (4× per second), also while the load is idle — e.g. it warns when "
+                       "a too-high voltage is connected. An alarm triggers once when the limit is exceeded for two "
+                       "readings in a row and re-arms after the value drops 2 % below the limit. Settings are saved "
+                       "to ~/.config/bw600/alarms.json and are also used by 'bw600 monitor'.").pack(fill="x", pady=6)
 
     def _build_system(self, nb):
         frame = ttk.Frame(nb, padding=12)
@@ -344,6 +379,9 @@ class App(tk.Tk):
         self.dev.on_live.append(lambda live: self.events.put(("live", live)))
         self.dev.on_settings.append(lambda s: self.events.put(("settings", s)))
         self.dev.on_raw.append(self._raw_cb)
+        self.dev.on_stop.append(lambda ev: self.events.put(("stop", ev)))
+        self.dev.on_alarm.append(lambda ev: self.events.put(("alarm", ev)))
+        self.apply_alarms(save=False)
         self.dev.start()
         self.dev.request_settings()
         self.settings_loaded = False
@@ -413,6 +451,7 @@ class App(tk.Tk):
     def toggle_run(self):
         if not self._need_dev():
             return
+        self.stop_banner.pack_forget()
         running = bool(self.dev.live and self.dev.live.running)
         self.dev.run(not running)
 
@@ -434,6 +473,10 @@ class App(tk.Tk):
                     self.on_live(payload)
                 elif kind == "settings":
                     self.on_settings(payload)
+                elif kind == "stop":
+                    self.on_stop(payload)
+                elif kind == "alarm":
+                    self.on_alarm(payload)
                 elif kind == "raw":
                     d, data = payload
                     self.console.insert("end", f"{dt.datetime.now():%H:%M:%S.%f}"[:-3] + f" {d} {p.hexdump(data)}\n")
@@ -462,8 +505,10 @@ class App(tk.Tk):
         total = self.run_elapsed + (time.monotonic() - self.run_started if self.run_started else 0)
         h, rem = divmod(int(total), 3600)
         self.elapsed_var.set(f"Run time (this session): {h}:{rem // 60:02d}:{rem % 60:02d}")
-        if live.running:
+        if live.running and (live.amps or 0) >= 0.01:
             state = "RUNNING — discharging" if live.discharging else "RUNNING — charging"
+        elif live.running:
+            state = "RUNNING"
         else:
             state = "idle"
         self.devstate_var.set(f"{state}   status {live.status_a}/{live.status_b}")
@@ -477,6 +522,66 @@ class App(tk.Tk):
             self.csv_file.flush()
         if not self.pause_var.get() and len(self.hist_t) % 2 == 0:
             self.redraw()
+
+    def on_stop(self, ev: p.StopEvent):
+        stamp = dt.datetime.now().strftime("%H:%M:%S")
+        text = f"{stamp}  Load stopped — {ev.message}"
+        if ev.inferred:
+            text += "  (reason inferred from readings)"
+        self.console.insert("end", text + "\n")
+        self.console.see("end")
+        if self.csv_file:
+            self.rec_var.set(f"{self.rec_var.get().splitlines()[0]}\nlast stop: {stamp} {ev.reason}")
+        if ev.reason == "user":
+            self.stop_banner.pack_forget()
+            return
+        if ev.reason == "alarm":  # the alarm itself was already announced
+            return
+        self.stop_banner.configure(bg="#fff3cd", fg="#664d03")
+        self.stop_var.set(text + "   (click to dismiss)")
+        self.stop_banner.pack(fill="x", before=self.body)
+        self.bell()
+        # Let the pending "stopped" readings update the display before the modal dialog blocks.
+        self.after(300, lambda: messagebox.showinfo("BW600 — load stopped", ev.message + ("\n\n(The device does not report the reason; "
+                            "it was inferred from the last readings and your limits.)" if ev.inferred else "")))
+
+    def on_alarm(self, ev: AlarmEvent):
+        stopping = self.dev and self.dev.alarms.config.stop_load and self.dev.live and self.dev.live.running
+        stamp = dt.datetime.now().strftime("%H:%M:%S")
+        text = f"{stamp}  ALARM — {ev.message}" + ("  Load switched OFF." if stopping else "")
+        self.console.insert("end", text + "\n")
+        self.console.see("end")
+        self.stop_var.set(text + "   (click to dismiss)")
+        self.stop_banner.configure(bg="#f8d7da", fg="#58151c")
+        self.stop_banner.pack(fill="x", before=self.body)
+        self.bell()
+        self.after(300, lambda: messagebox.showwarning("BW600 — alarm", text[10:]))
+
+    def apply_alarms(self, save: bool = True):
+        v = self.alarm_vars
+        try:
+            cfg = AlarmConfig(
+                over_voltage_enabled=v["over_voltage_enabled"].get(),
+                over_voltage=float(v["over_voltage"].get().replace(",", ".")),
+                over_current_enabled=v["over_current_enabled"].get(),
+                over_current=float(v["over_current"].get().replace(",", ".")),
+                stop_load=v["stop_load"].get(),
+            )
+        except ValueError:
+            messagebox.showerror("BW600", "Alarm limits must be numbers.")
+            return
+        if save:
+            cfg.save()
+        if self.dev:
+            self.dev.alarms.config = cfg
+            self.dev.alarms.reset()
+        parts = []
+        if cfg.over_voltage_enabled:
+            parts.append(f"V > {cfg.over_voltage:g} V")
+        if cfg.over_current_enabled:
+            parts.append(f"I > {cfg.over_current:g} A")
+        self.alarm_state_var.set(("Active: " + ", ".join(parts) + (" → stop load" if cfg.stop_load else " → warn only"))
+                                 if parts else "No application alarms enabled.")
 
     def on_settings(self, s: p.Settings):
         self.mode_var.set(f"Mode: {p.mode_name(s.mode)}")

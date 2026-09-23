@@ -88,6 +88,17 @@ def cmd_monitor(dev: BW600, args) -> None:
         writer.writerow(["DATE", "VOLTAGE(V)", "CURRENT(A)", "POWER(W)", "RESISTANCE(Ω)", "E_QUANTITY(Wh)",
                          "E_CAPACITY(mAh)", "NTC_TEMP(℃)", "CPU_TEMP(℃)", "MOS_TEMP(℃)", "FAN_SPEED"])
     last = None
+    cfg = dev.alarms.config
+    if args.max_voltage is not None:
+        cfg.over_voltage_enabled, cfg.over_voltage = True, args.max_voltage
+    if args.max_current is not None:
+        cfg.over_current_enabled, cfg.over_current = True, args.max_current
+    if args.warn_only:
+        cfg.stop_load = False
+    dev.alarms.reset()
+    dev.on_alarm.append(lambda ev: print(f"{dt.datetime.now():%H:%M:%S}  !!! ALARM: {ev.message}", flush=True))
+    dev.on_stop.append(lambda ev: print(f"{dt.datetime.now():%H:%M:%S}  *** load stopped: {ev.message}"
+                                        + (" (inferred)" if ev.inferred else ""), flush=True))
     print("time      V         A         W         mAh        Wh       MOS°C  run")
     try:
         while True:
@@ -130,6 +141,9 @@ def main(argv=None) -> int:
     m = sub.add_parser("monitor", help="stream measurements")
     m.add_argument("--csv", help="also write to CSV file")
     m.add_argument("--interval", type=float, default=0.5)
+    m.add_argument("--max-voltage", type=float, help="over-voltage alarm limit (V)")
+    m.add_argument("--max-current", type=float, help="over-current alarm limit (A)")
+    m.add_argument("--warn-only", action="store_true", help="alarms only warn, do not switch the load off")
     sub.add_parser("start", help="switch the load ON")
     sub.add_parser("stop", help="switch the load OFF")
     s = sub.add_parser("set", help="change a setting")

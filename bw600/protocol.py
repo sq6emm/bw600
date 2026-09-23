@@ -299,3 +299,67 @@ def parse_scan(buf: bytes) -> int | None:
 
 def hexdump(b: bytes) -> str:
     return " ".join(f"{x:02X}" for x in b)
+
+
+# ---------------------------------------------------------------------------
+# Stop reason
+# ---------------------------------------------------------------------------
+# The device does not report why it switched the load off: only the run flag
+# (byte 0x34) changes. The reason is inferred from the readings just before
+# the stop, compared with the configured limits.
+
+@dataclass
+class StopEvent:
+    reason: str        # short machine-readable key
+    message: str       # human readable explanation
+    inferred: bool = True
+
+
+def infer_stop_reason(window: list[Live], settings: Settings | None,
+                      run_seconds: float | None = None,
+                      requested: bool = False) -> StopEvent:
+    """Explain a running -> idle transition.
+
+    ``window`` holds the live samples of the last few seconds while the load
+    was running (oldest first). ``run_seconds`` is how long the load ran as
+    observed by this program; ``requested`` is True if we sent the stop.
+    """
+    if requested:
+        return StopEvent("user", "Stopped from this application.", inferred=False)
+    samples = [s for s in window if s.voltage is not None]
+    if not samples or settings is None:
+        return StopEvent("unknown", "Stopped by the device (it does not report a reason).")
+
+    v_min = min(s.voltage for s in samples)
+    v_last = samples[-1].voltage
+    i_max = max((s.amps or 0) for s in samples)
+    p_max = max((s.power or 0) for s in samples)
+    t_mos = max((s.mos_temp or 0) for s in samples)
+    t_ntc = max((s.ntc_temp or 0) for s in samples)
+    charging = any(s.running and not s.discharging and (s.amps or 0) > 0.01 for s in samples)
+
+    def near(value, limit, rel=0.01, abs_=0.02):
+        return value >= limit - max(abs_, rel * abs(limit))
+
+    if v_min < 0.5 and v_last < 0.5:
+        return StopEvent("no_input", f"Input voltage lost ({v_last:.3f} V): battery/source disconnected?")
+    if settings.mos_over_temp > 0 and near(t_mos, settings.mos_over_temp, abs_=1.0):
+        return StopEvent("mos_otp", f"MOSFET over-temperature: {t_mos:.1f} °C ≥ {settings.mos_over_temp:g} °C.")
+    if settings.ntc_over_temp > 0 and near(t_ntc, settings.ntc_over_temp, abs_=1.0):
+        return StopEvent("ntc_otp", f"Probe over-temperature: {t_ntc:.1f} °C ≥ {settings.ntc_over_temp:g} °C.")
+    if settings.over_current > 0 and near(i_max, settings.over_current):
+        return StopEvent("ocp", f"Over-current protection: {i_max:.3f} A ≥ {settings.over_current:g} A.")
+    if settings.over_power > 0 and near(p_max, settings.over_power):
+        return StopEvent("opp", f"Over-power protection: {p_max:.2f} W ≥ {settings.over_power:g} W.")
+    if charging:
+        if settings.full_voltage > 0 and near(max(s.voltage for s in samples), settings.full_voltage):
+            return StopEvent("charged", f"Charge complete: full voltage {settings.full_voltage:g} V reached.")
+        if settings.full_current > 0 and min(s.amps or 0 for s in samples) <= settings.full_current * 1.1:
+            return StopEvent("charged", f"Charge complete: current fell to the end current {settings.full_current:g} A.")
+    elif settings.cutoff_voltage > 0 and v_min <= settings.cutoff_voltage + max(0.02, 0.01 * settings.cutoff_voltage):
+        return StopEvent("cutoff", f"Cut-off voltage reached: {v_min:.3f} V ≤ {settings.cutoff_voltage:g} V "
+                                   f"(discharge finished).")
+    limit_s = (settings.time_limit_h * 60 + settings.time_limit_m) * 60
+    if limit_s and run_seconds is not None and run_seconds >= limit_s - 5:
+        return StopEvent("time", f"Time limit reached ({settings.time_limit_h} h {settings.time_limit_m} min).")
+    return StopEvent("device", "Stopped on the device (button/knob) or for a reason it does not report.")

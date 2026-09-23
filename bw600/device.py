@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import glob
 import os
 import select
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import protocol as p
+from .alarms import AlarmConfig, AlarmEvent, AlarmMonitor
 
 
 @dataclass
@@ -115,6 +117,14 @@ class BW600:
         self.on_live: list[Callable[[p.Live], None]] = []
         self.on_settings: list[Callable[[p.Settings], None]] = []
         self.on_raw: list[Callable[[str, bytes], None]] = []
+        self.on_stop: list[Callable[[p.StopEvent], None]] = []
+        self.last_stop: p.StopEvent | None = None
+        self._window: collections.deque = collections.deque()
+        self._run_since: float | None = None
+        self._stop_requested_at = 0.0
+        self._stop_note: str | None = None
+        self.alarms = AlarmMonitor(AlarmConfig.load())
+        self.on_alarm: list[Callable[[AlarmEvent], None]] = []
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> "BW600":
@@ -145,7 +155,13 @@ class BW600:
         with self._lock:
             self._queue.append(report)
 
-    def run(self, on: bool) -> None:
+    def run(self, on: bool, note: str | None = None) -> None:
+        """Switch the load; ``note`` explains an automatic stop in the stop event."""
+        if not on:
+            self._stop_requested_at = time.monotonic()
+            self._stop_note = note
+        else:
+            self.alarms.reset()
         self.send(p.run_frame(on, self.addr))
 
     def start_load(self) -> None:
@@ -211,9 +227,18 @@ class BW600:
         if t == 0x05:
             live = p.parse_live(buf, self.live)
             if live:
+                event = self._track_run(live)
                 self.live = live
                 for cb in list(self.on_live):
                     cb(live)
+                for alarm in self.alarms.check(live):
+                    if self.alarms.config.stop_load and live.running:
+                        self.run(False, note=f"Alarm: {alarm.message}")
+                    for cb in list(self.on_alarm):
+                        cb(alarm)
+                if event:
+                    for cb in list(self.on_stop):
+                        cb(event)
         elif t == 0x03:
             s = p.parse_settings(buf)
             if s:
@@ -224,6 +249,30 @@ class BW600:
             addr = p.parse_scan(buf)
             if addr is not None:
                 self.addr = addr
+
+    def _track_run(self, live: p.Live) -> p.StopEvent | None:
+        now = time.monotonic()
+        was_running = bool(self.live and self.live.running)
+        if live.running:
+            if not was_running:
+                self._run_since = now
+                self._window.clear()
+            self._window.append((now, live))
+            while self._window and now - self._window[0][0] > 5.0:
+                self._window.popleft()
+        elif was_running:
+            run_s = now - self._run_since if self._run_since else None
+            requested = now - self._stop_requested_at < 3.0
+            if requested and self._stop_note:
+                event = p.StopEvent("alarm", f"Stopped by this application — {self._stop_note}", inferred=False)
+            else:
+                event = p.infer_stop_reason([s for _t, s in self._window], self.settings, run_s, requested)
+            self._stop_note = None
+            self.last_stop = event
+            self._window.clear()
+            self._run_since = None
+            return event
+        return None
 
     def _run(self) -> None:
         while not self._stop.is_set():
