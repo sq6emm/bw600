@@ -91,6 +91,8 @@ def cmd_monitor(dev: BW600, args) -> None:
     cfg = dev.alarms.config
     if args.max_voltage is not None:
         cfg.over_voltage_enabled, cfg.over_voltage = True, args.max_voltage
+    if args.min_voltage is not None:
+        cfg.under_voltage_enabled, cfg.under_voltage = True, args.min_voltage
     if args.max_current is not None:
         cfg.over_current_enabled, cfg.over_current = True, args.max_current
     if args.warn_only:
@@ -142,6 +144,7 @@ def main(argv=None) -> int:
     m.add_argument("--csv", help="also write to CSV file")
     m.add_argument("--interval", type=float, default=0.5)
     m.add_argument("--max-voltage", type=float, help="over-voltage alarm limit (V)")
+    m.add_argument("--min-voltage", type=float, help="under-voltage alarm limit (V)")
     m.add_argument("--max-current", type=float, help="over-current alarm limit (A)")
     m.add_argument("--warn-only", action="store_true", help="alarms only warn, do not switch the load off")
     sub.add_parser("start", help="switch the load ON")

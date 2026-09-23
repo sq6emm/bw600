@@ -126,7 +126,9 @@ def test_alarm_debounce_and_rearm():
     assert [e.kind for e in ev] == ["over_voltage"]
     assert mon.check(_live(12.7, 1.0)) == []            # latched: no repeat
     assert mon.check(_live(11.9, 1.0)) == []            # within hysteresis: still latched
+    assert mon.active() == ["over_voltage"]
     mon.check(_live(11.5, 1.0))                         # re-armed
+    assert mon.active() == []
     mon.check(_live(12.5, 1.0))
     assert [e.kind for e in mon.check(_live(12.5, 1.0))] == ["over_voltage"]
     mon.check(_live(10.0, 5.0))
@@ -138,3 +140,21 @@ def test_alarm_disabled():
     mon = AlarmMonitor(AlarmConfig())
     for _ in range(5):
         assert mon.check(_live(50.0, 50.0)) == []
+
+
+def test_under_voltage_alarm():
+    from bw600.alarms import AlarmConfig, AlarmMonitor
+    mon = AlarmMonitor(AlarmConfig(under_voltage_enabled=True, under_voltage=10.0))
+    assert mon.check(_live(0.0, 0.0, running=False)) == []   # nothing connected: ignored
+    assert mon.check(_live(0.0, 0.0, running=False)) == []
+    assert mon.check(_live(11.0, 5.0)) == []
+    assert mon.check(_live(9.9, 5.0)) == []                  # debounce
+    ev = mon.check(_live(9.8, 5.0))
+    assert [e.kind for e in ev] == ["under_voltage"] and "<" in ev[0].message
+    assert mon.check(_live(9.7, 5.0)) == []                  # latched
+    assert mon.check(_live(10.1, 0.0)) == []                 # inside hysteresis: still latched
+    assert mon.active() == ["under_voltage"]
+    mon.check(_live(10.5, 0.0))                              # re-armed
+    assert mon.active() == []
+    mon.check(_live(9.5, 5.0))
+    assert [e.kind for e in mon.check(_live(9.5, 5.0))] == ["under_voltage"]

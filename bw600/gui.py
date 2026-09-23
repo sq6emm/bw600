@@ -282,24 +282,28 @@ class App(tk.Tk):
         self.alarm_vars = {
             "over_voltage_enabled": tk.BooleanVar(value=cfg.over_voltage_enabled),
             "over_voltage": tk.StringVar(value=f"{cfg.over_voltage:g}"),
+            "under_voltage_enabled": tk.BooleanVar(value=cfg.under_voltage_enabled),
+            "under_voltage": tk.StringVar(value=f"{cfg.under_voltage:g}"),
             "over_current_enabled": tk.BooleanVar(value=cfg.over_current_enabled),
             "over_current": tk.StringVar(value=f"{cfg.over_current:g}"),
             "stop_load": tk.BooleanVar(value=cfg.stop_load),
         }
         for row, (key, label, unit) in enumerate((("over_voltage", "Over-voltage alarm above", "V"),
+                                                   ("under_voltage", "Under-voltage alarm below", "V"),
                                                    ("over_current", "Over-current alarm above", "A"))):
             ttk.Checkbutton(a, text=label, variable=self.alarm_vars[key + "_enabled"]).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(a, textvariable=self.alarm_vars[key], width=10).grid(row=row, column=1, padx=6)
             ttk.Label(a, text=unit).grid(row=row, column=2, sticky="w")
         ttk.Checkbutton(a, text="Switch the load OFF when an alarm trips",
-                        variable=self.alarm_vars["stop_load"]).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Button(a, text="Apply & save", command=self.apply_alarms).grid(row=3, column=0, sticky="w", pady=(8, 0))
+                        variable=self.alarm_vars["stop_load"]).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Button(a, text="Apply & save", command=self.apply_alarms).grid(row=4, column=0, sticky="w", pady=(8, 0))
         self.alarm_state_var = tk.StringVar(value="")
-        ttk.Label(a, textvariable=self.alarm_state_var, style="Cap.TLabel").grid(row=3, column=1, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(a, textvariable=self.alarm_state_var, style="Cap.TLabel").grid(row=4, column=1, columnspan=3, sticky="w", pady=(8, 0))
         ttk.Label(frame, style="Cap.TLabel", wraplength=700, justify="left",
                   text="Checked on every reading (4× per second), also while the load is idle — e.g. it warns when "
                        "a too-high voltage is connected. An alarm triggers once when the limit is exceeded for two "
-                       "readings in a row and re-arms after the value drops 2 % below the limit. Settings are saved "
+                       "readings in a row and re-arms once the value is back 2 % inside the limit. The under-voltage alarm "
+                       "ignores readings below 0.5 V (nothing connected). Settings are saved "
                        "to ~/.config/bw600/alarms.json and are also used by 'bw600 monitor'.").pack(fill="x", pady=6)
 
     def _build_system(self, nb):
@@ -563,6 +567,8 @@ class App(tk.Tk):
             cfg = AlarmConfig(
                 over_voltage_enabled=v["over_voltage_enabled"].get(),
                 over_voltage=float(v["over_voltage"].get().replace(",", ".")),
+                under_voltage_enabled=v["under_voltage_enabled"].get(),
+                under_voltage=float(v["under_voltage"].get().replace(",", ".")),
                 over_current_enabled=v["over_current_enabled"].get(),
                 over_current=float(v["over_current"].get().replace(",", ".")),
                 stop_load=v["stop_load"].get(),
@@ -578,6 +584,8 @@ class App(tk.Tk):
         parts = []
         if cfg.over_voltage_enabled:
             parts.append(f"V > {cfg.over_voltage:g} V")
+        if cfg.under_voltage_enabled:
+            parts.append(f"V < {cfg.under_voltage:g} V")
         if cfg.over_current_enabled:
             parts.append(f"I > {cfg.over_current:g} A")
         self.alarm_state_var.set(("Active: " + ", ".join(parts) + (" → stop load" if cfg.stop_load else " → warn only"))

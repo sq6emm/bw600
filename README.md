@@ -35,7 +35,7 @@ pip install --user .          # optional: installs the `bw600` command
   - a completed charge
   - a lost input
   - a stop made on the device itself
-- **Application alarms (Protection tab):** your own over-voltage and over-current limits, checked on every reading (4× a second), even while idle. When one trips you get a red banner and a popup, and the load can switch off automatically. The limits are saved to `~/.config/bw600/alarms.json`.
+- **Application alarms (Protection tab):** your own over-voltage, under-voltage and over-current limits, checked on every reading (4× a second), even while idle. The under-voltage alarm ignores readings below 0.5 V, which means nothing is connected. When one trips you get a red banner and a popup, and the load can switch off automatically. The limits are saved to `~/.config/bw600/alarms.json`.
 - **Calibration:** voltage, current and temperature factors. Don't change these unless you really need to.
 - **Raw / Info:** a HID frame log and a hex-send box, for debugging.
 
@@ -46,7 +46,7 @@ The device reports its mode (CC, CV, CR, CP, internal resistance, power-supply t
 ```sh
 bw600 status                       # measurements + all settings
 bw600 monitor --csv log.csv        # stream readings, report stops with their reason
-bw600 monitor --max-voltage 14.6 --max-current 5   # with over-voltage/over-current alarms
+bw600 monitor --max-voltage 14.6 --min-voltage 10.5 --max-current 5   # with alarms
                                    # (add --warn-only to keep the load running)
 bw600 start | stop                 # load on/off
 bw600 set value 2.5                # setpoint (A / V / Ω / W per mode)
