@@ -1,0 +1,2 @@
+# ATORCH BW600 electronic load (USB HID 0483:5750) - allow access for the logged-in user
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5750", MODE="0660", GROUP="plugdev", TAG+="uaccess"

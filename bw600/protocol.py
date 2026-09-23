@@ -1,0 +1,301 @@
+"""ATORCH BW600 USB-HID protocol.
+
+Reverse engineered from the vendor PC software (Load_Application.exe v1.0.8,
+"ATORCH LOAD_Tester Software" for CL24/BW150/BW600/DL150).
+
+Host -> device (zero padded to one 64 byte HID report)::
+
+    55 05 <addr> <cmd> d0 d1 d2 d3 EE FF
+
+Values are big-endian; floating point settings are IEEE-754 float32.
+
+Device -> host (64 byte report)::
+
+    AA 05 <addr> <type> ...payload... EE FF      (EE FF at offsets 62/63)
+
+type 0x03 - settings snapshot (big-endian float32 fields + bytes)
+type 0x05 - live measurements (little-endian uint32, value * 1000)
+"""
+
+from __future__ import annotations
+
+import struct
+from dataclasses import dataclass, field, fields
+from enum import IntEnum
+
+VID = 0x0483
+PID = 0x5750
+REPORT_SIZE = 64
+DEFAULT_ADDR = 0x01
+
+TX_HEAD = b"\x55\x05"
+RX_HEAD = 0xAA
+TAIL = b"\xee\xff"
+
+
+class Cmd(IntEnum):
+    """Command byte (offset 3 of a host frame)."""
+
+    READ_SETTINGS = 0x03   # 55 05 01 03 00 00 00 EE FF -> type 03 reply
+    READ_LIVE = 0x05       # 55 05 01 05 0B 00 8C EE FF -> type 05 reply
+    LANGUAGE = 0x20        # d0 = 1..4
+    SET_VALUE = 0x21       # float: current (CC) / voltage (CV) / resistance (CR) / power (CP)
+    WORK_BRIGHTNESS = 0x22   # d3 = level
+    STANDBY_BRIGHTNESS = 0x23  # d3 = level
+    STANDBY_TIME = 0x24    # d3 = value
+    RUN = 0x25             # d0 = 1 start, 0 stop
+    CAL_TEMP = 0x26        # float
+    CAL_VOLTAGE = 0x27     # float
+    CAL_CURRENT = 0x28     # float
+    CUTOFF_VOLTAGE = 0x29  # float, discharge end ("zero") voltage
+    FULL_VOLTAGE = 0x2A    # float, charge full voltage
+    FULL_CURRENT = 0x2B    # float, charge end current
+    OVER_CURRENT = 0x2C    # float
+    OVER_POWER = 0x2D      # float
+    NTC_OVER_TEMP = 0x2E   # float
+    MOS_OVER_TEMP = 0x2F   # float
+    TIME_LIMIT = 0x31      # d0 = value, d3 = 1 (hours) / 2 (minutes)
+    CLEAR_CAPACITY = 0x32  # "clear current" button: resets accumulated Ah/Wh
+    FACTORY_RESET = 0x33
+    DATA_ZERO = 0x34       # zero offset of measurements
+    DT20_OPTION = 0x36     # d3 = combo box index (DT20 settings page)
+
+
+# Commands that must never be sent from this tool (firmware upgrade path).
+FORBIDDEN_RAW = {0x02}
+
+
+class Mode(IntEnum):
+    CC = 0
+    CV = 1
+    CR = 2
+    CP = 3
+    INTERNAL_RESISTANCE = 4
+    POWER_SUPPLY_TEST = 5
+    CABLE_TEST = 6
+    CHARGE_DISCHARGE_CHARGE = 7
+    CDCDC = 8
+    CYCLE_TEST = 9
+
+
+MODE_NAMES = {
+    Mode.CC: "Constant current (CC)",
+    Mode.CV: "Constant voltage (CV)",
+    Mode.CR: "Constant resistance (CR)",
+    Mode.CP: "Constant power (CP)",
+    Mode.INTERNAL_RESISTANCE: "Internal resistance test",
+    Mode.POWER_SUPPLY_TEST: "Power supply test",
+    Mode.CABLE_TEST: "Cable test",
+    Mode.CHARGE_DISCHARGE_CHARGE: "Charge-discharge-charge",
+    Mode.CDCDC: "Charge-discharge x2-charge",
+    Mode.CYCLE_TEST: "Charge/discharge cycle test",
+}
+
+# (label, unit) of the SET_VALUE parameter per mode, as shown by the vendor app.
+SET_VALUE_LABEL = {
+    Mode.CC: ("Set current", "A"),
+    Mode.CV: ("Set voltage", "V"),
+    Mode.CR: ("Set resistance", "Ω"),
+    Mode.CP: ("Set power", "W"),
+}
+
+
+def mode_name(mode: int | None) -> str:
+    if mode is None:
+        return "?"
+    try:
+        return MODE_NAMES[Mode(mode)]
+    except ValueError:
+        return f"Unknown ({mode})"
+
+
+# ---------------------------------------------------------------------------
+# Host -> device frames
+# ---------------------------------------------------------------------------
+
+def frame(cmd: int, data: bytes = b"\x00\x00\x00\x00", addr: int = DEFAULT_ADDR) -> bytes:
+    """Build a 10 byte command frame."""
+    if len(data) != 4:
+        raise ValueError("payload must be 4 bytes")
+    return TX_HEAD + bytes([addr & 0xFF, cmd & 0xFF]) + data + TAIL
+
+
+def poll_frame(cmd: int, addr: int = DEFAULT_ADDR) -> bytes:
+    """9 byte poll frame exactly as sent by the vendor software timer."""
+    return TX_HEAD + bytes([addr & 0xFF, cmd & 0xFF, 0x0B, 0x00, 0x8C]) + TAIL
+
+
+def read_settings_frame(addr: int = DEFAULT_ADDR) -> bytes:
+    return TX_HEAD + bytes([addr & 0xFF, Cmd.READ_SETTINGS, 0, 0, 0]) + TAIL
+
+
+def float_frame(cmd: int, value: float, addr: int = DEFAULT_ADDR) -> bytes:
+    return frame(cmd, struct.pack(">f", float(value)), addr)
+
+
+def byte_frame(cmd: int, value: int, addr: int = DEFAULT_ADDR) -> bytes:
+    """Single byte value in d3 (brightness / standby sliders, combo boxes)."""
+    return frame(cmd, bytes([0, 0, 0, int(value) & 0xFF]), addr)
+
+
+def run_frame(on: bool, addr: int = DEFAULT_ADDR) -> bytes:
+    return frame(Cmd.RUN, bytes([1 if on else 0, 0, 0, 0]), addr)
+
+
+def language_frame(option: int, addr: int = DEFAULT_ADDR) -> bytes:
+    return frame(Cmd.LANGUAGE, bytes([option & 0xFF, 0, 0, 0]), addr)
+
+
+def time_limit_frames(hours: int, minutes: int, addr: int = DEFAULT_ADDR) -> list[bytes]:
+    if not (0 <= hours <= 255 and 0 <= minutes <= 59):
+        raise ValueError("hours 0..255, minutes 0..59")
+    return [
+        frame(Cmd.TIME_LIMIT, bytes([hours, 0, 0, 1]), addr),
+        frame(Cmd.TIME_LIMIT, bytes([minutes, 0, 0, 2]), addr),
+    ]
+
+
+def simple_frame(cmd: int, addr: int = DEFAULT_ADDR) -> bytes:
+    return frame(cmd, b"\x00\x00\x00\x00", addr)
+
+
+def pad(report: bytes) -> bytes:
+    if len(report) > REPORT_SIZE:
+        raise ValueError("report too long")
+    return report + bytes(REPORT_SIZE - len(report))
+
+
+# ---------------------------------------------------------------------------
+# Device -> host frames
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Settings:
+    set_value: float = 0.0
+    cal_temp: float = 0.0
+    cal_voltage: float = 0.0
+    cal_current: float = 0.0
+    cutoff_voltage: float = 0.0
+    full_voltage: float = 0.0
+    full_current: float = 0.0
+    over_current: float = 0.0
+    over_power: float = 0.0
+    ntc_over_temp: float = 0.0
+    mos_over_temp: float = 0.0
+    mode: int = 0
+    language: int = 0
+    work_brightness: int = 0
+    standby_brightness: int = 0
+    standby_time: int = 0
+    time_limit_h: int = 0
+    time_limit_m: int = 0
+    raw: bytes = field(default=b"", repr=False)
+
+
+# Order of the eleven big-endian floats at offsets 4..47 of a type 03 frame.
+_SETTINGS_FLOATS = (
+    "set_value", "cal_temp", "cal_voltage", "cal_current", "cutoff_voltage",
+    "full_voltage", "full_current", "over_current", "over_power",
+    "ntc_over_temp", "mos_over_temp",
+)
+_SETTINGS_BYTES = (
+    "mode", "language", "work_brightness", "standby_brightness",
+    "standby_time", "time_limit_h", "time_limit_m",
+)
+
+
+@dataclass
+class Live:
+    voltage: float | None = None       # V
+    current: float | None = None       # A, signed as the vendor app: negative while discharging
+    power: float | None = None         # W
+    resistance: float | None = None    # Ω
+    energy: float | None = None        # Wh
+    capacity: float | None = None      # mAh
+    ntc_temp: float | None = None      # °C (external probe)
+    cpu_temp: float | None = None      # °C
+    mos_temp: float | None = None      # °C
+    fan: float | None = None           # fan level (30 while the load runs, 0 idle)
+    running: bool = False
+    status_a: int = 0                  # byte 0x35
+    status_b: int = 0                  # byte 0x36
+    flags: int = 0                     # byte 0x3c (sign bits)
+    raw: bytes = field(default=b"", repr=False)
+
+    @property
+    def discharging(self) -> bool:
+        """Flag 0x80: current flows into the load (the vendor app shows it negative)."""
+        return bool(self.flags & 0x80)
+
+    @property
+    def amps(self) -> float | None:
+        """Current magnitude; use ``discharging`` for the direction."""
+        return None if self.current is None else abs(self.current)
+
+    def as_dict(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name != "raw"}
+
+
+# (field, offset, max raw value accepted, sign flag bit in byte 0x3c)
+_LIVE_LAYOUT = (
+    ("voltage", 0x08, 500_000, 0),
+    ("current", 0x0C, 1_500_000, 0x80),
+    ("power", 0x10, 420_000_000, 0),
+    ("resistance", 0x14, 1_000_000_000, 0),
+    ("energy", 0x18, 1_000_000_000, 0),
+    ("capacity", 0x1C, 1_000_000_000, 0),
+    ("cpu_temp", 0x20, 300_000, 0x40),   # whole degrees
+    ("ntc_temp", 0x24, 300_000, 0x20),   # external probe
+    ("mos_temp", 0x28, 300_000, 0x10),
+    ("fan", 0x2C, 10_000_000, 0),
+)
+
+
+def is_reply(buf: bytes) -> bool:
+    return len(buf) >= 10 and buf[0] == RX_HEAD and buf[1] == 0x05
+
+
+def reply_type(buf: bytes) -> int | None:
+    return buf[3] if is_reply(buf) else None
+
+
+def parse_settings(buf: bytes) -> Settings | None:
+    if not is_reply(buf) or buf[3] != 0x03 or len(buf) < 64 or buf[62:64] != TAIL:
+        return None
+    s = Settings(raw=bytes(buf))
+    for i, name in enumerate(_SETTINGS_FLOATS):
+        setattr(s, name, struct.unpack_from(">f", buf, 4 + 4 * i)[0])
+    for i, name in enumerate(_SETTINGS_BYTES):
+        setattr(s, name, buf[0x30 + i])
+    return s
+
+
+def parse_live(buf: bytes, previous: Live | None = None) -> Live | None:
+    if not is_reply(buf) or buf[3] != 0x05 or len(buf) < 64:
+        return None
+    flags = buf[0x3C]
+    live = Live(raw=bytes(buf), flags=flags)
+    for name, off, limit, sign in _LIVE_LAYOUT:
+        raw = struct.unpack_from("<I", buf, off)[0]
+        if raw < limit:
+            value = raw / 1000.0
+            if sign and flags & sign:
+                value = -value
+        else:  # out of range: the vendor app keeps the previous value
+            value = getattr(previous, name) if previous else None
+        setattr(live, name, value)
+    live.running = buf[0x34] != 0
+    live.status_a = buf[0x35]
+    live.status_b = buf[0x36]
+    return live
+
+
+def parse_scan(buf: bytes) -> int | None:
+    """Device scan reply (type 04): returns the device address."""
+    if is_reply(buf) and buf[3] == 0x04 and buf[8:10] == TAIL and buf[4] == 1:
+        return buf[2]
+    return None
+
+
+def hexdump(b: bytes) -> str:
+    return " ".join(f"{x:02X}" for x in b)
