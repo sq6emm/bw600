@@ -314,7 +314,8 @@ def main(argv=None) -> int:
                     print("error: factory reset can only be done interactively", file=sys.stderr)
                     return 1
                 wait_for(dev, "settings")
-                print("This resets ALL settings and the calibration to factory values.")
+                print("This resets ALL settings and the calibration to factory values,")
+                print("and on WiFi models also clears the WiFi pairing (re-add the device in the Tuya app).")
                 if input(f"Type {RESET_UNLOCK_WORD} to continue: ").strip() != RESET_UNLOCK_WORD:
                     print("nothing was reset")
                     return 1

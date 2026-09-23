@@ -630,7 +630,8 @@ class App(tk.Tk):
             return
         word = simpledialog.askstring(
             "Factory reset",
-            "This resets ALL settings to factory defaults and calibration to the factory values.\n"
+            "This resets ALL settings to factory defaults and calibration to the factory values,\n"
+            "and on WiFi models it also clears the WiFi pairing (the device must be re-added in the app).\n"
             "A snapshot of the current settings is saved first.\n\n"
             f"Type {RESET_UNLOCK_WORD} to continue:", parent=self)
         if word is None:

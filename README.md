@@ -30,7 +30,7 @@ pip install --user .          # optional: installs the `bw600` command
   - working and standby brightness, and standby time
   - language
   - clearing the capacity counters and zeroing the readings
-  - **factory reset, locked**: you type `RESET` and then confirm. It resets all settings *and* the calibration (to the factory calibration stored in flash), so a snapshot of your settings is saved first
+  - **factory reset, locked**: you type `RESET` and then confirm. It resets all settings *and* the calibration (to the factory calibration stored in flash), so a snapshot of your settings is saved first. On WiFi models it also clears the WiFi pairing
   - saving settings to a JSON snapshot, and restoring one (everything except calibration)
   - the firmware version, a check of ATORCH's download page for newer firmware, and a download button
 - **Stop reasons:** when the load switches itself off, a banner and popup say why, for example "Cut-off voltage reached: 8.941 V ≤ 9 V". The BW600 doesn't report a reason, so the app infers it from the last readings and your limits. It recognises:
@@ -130,3 +130,7 @@ Once decrypted, the application runs on JieLi's q32s CPU and can be disassembled
 Copies of every file ATORCH publishes for the BW600 (PC software, its manual, and the firmware 2.0.3, 2.0.5 and 2.0.5-custom) are in [`vendor/`](vendor/), stored unmodified with their source URLs and SHA-256 checksums.
 
 The firmware version is part of the USB product string (`ATORCH BW600 V2.0.5`). `bw600 firmware` and the System tab compare it with the files on ATORCH's BW600 page and can download the newest one. This app doesn't flash firmware: use ATORCH's Windows tool for that. The update protocol is only partly worked out (the vendor tool sends `55 05 09 02` to restart into the updater, then transfers the file in `CC …` packets), and a failed flash could leave the device unusable.
+
+### WiFi / Bluetooth models
+
+The WiFi version has a Tuya WiFi module (Smart Life / Tuya app). The BW600's own chip talks to that module over a serial line using Tuya's MCU protocol (`55 AA 03 …`). The only network command it can send is `04`, "reset WiFi / enter pairing mode". It never handles the WiFi name, password or cloud token, because the Tuya app gives those straight to the WiFi module. So WiFi **can't be set up over USB**: pair the device with the Tuya / Smart Life app, or use **WIFI Reset** in the device's menu to re-pair it. A factory reset (`33`) also sends `04`.

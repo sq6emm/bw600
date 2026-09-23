@@ -285,7 +285,8 @@ class BW600:
         self._reset_unlocked_until = 0.0
 
     def factory_reset(self) -> str:
-        """Reset all settings and calibration to factory values. Requires
+        """Reset all settings and calibration to factory values (the firmware also resets
+        the Tuya WiFi module into pairing mode). Requires
         unlock_factory_reset(); saves a settings snapshot first and returns its path."""
         if not self.factory_reset_unlocked:
             raise FactoryResetLocked("Factory reset is locked. Unlock it first.")
