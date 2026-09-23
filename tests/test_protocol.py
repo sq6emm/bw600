@@ -178,3 +178,72 @@ def test_mode_frames():
     assert {p.MODE_KEYS[k] for k in p.MODE_KEYS} == set(p.Mode)
     with pytest.raises(ValueError):
         p.mode_frame(10)
+
+
+class _FakeHid:
+    def __init__(self, path):
+        self.sent = []
+
+    def write(self, report):
+        self.sent.append(report)
+
+    def read(self, timeout):
+        return None
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def dev(monkeypatch, tmp_path):
+    import bw600.device as d
+    monkeypatch.setattr(d, "HidrawDevice", _FakeHid)
+    monkeypatch.setattr(d, "find_devices", lambda: [])
+    monkeypatch.setattr(d, "BACKUP_DIR", str(tmp_path))
+    return d.BW600("/dev/null")
+
+
+def _queued(dev):
+    return [r for r in dev._queue if r[3] in p.CAL_COMMANDS]
+
+
+def test_calibration_locked_by_default(dev):
+    from bw600.device import CalibrationLocked
+    with pytest.raises(CalibrationLocked):
+        dev.set_float(p.Cmd.CAL_VOLTAGE, 1.0)
+    with pytest.raises(CalibrationLocked):          # raw frames are blocked too
+        dev.send(p.float_frame(p.Cmd.CAL_CURRENT, 1.0))
+    assert _queued(dev) == []
+
+
+def test_calibration_unlock_is_single_use_and_range_checked(dev):
+    from bw600.device import CalibrationLocked
+    dev.unlock_calibration(60)
+    with pytest.raises(ValueError):                 # out of range: nothing written, still unlocked
+        dev.write_calibration({p.Cmd.CAL_VOLTAGE: 2.0})
+    assert _queued(dev) == [] and dev.calibration_unlocked
+    dev.write_calibration({p.Cmd.CAL_VOLTAGE: 1.001})
+    assert len(_queued(dev)) == 1
+    assert not dev.calibration_unlocked             # locked again after the write
+    with pytest.raises(CalibrationLocked):
+        dev.write_calibration({p.Cmd.CAL_VOLTAGE: 1.0})
+
+
+def test_calibration_unlock_expires(dev, monkeypatch):
+    import bw600.device as d
+    now = [1000.0]
+    monkeypatch.setattr(d.time, "monotonic", lambda: now[0])
+    dev.unlock_calibration(120)
+    assert dev.calibration_unlocked
+    now[0] += 121
+    assert not dev.calibration_unlocked
+
+
+def test_calibration_backup_saved_once(dev, tmp_path):
+    import bw600.device as d
+    s = p.parse_settings(SETTINGS)
+    d._save_calibration_backup("123", s)
+    s.cal_voltage = 1.2
+    d._save_calibration_backup("123", s)            # existing backup is never overwritten
+    b = d.load_calibration_backup("123")
+    assert b["cal_voltage"] == pytest.approx(1.0016776) and b["cal_current"] == pytest.approx(0.9145828)

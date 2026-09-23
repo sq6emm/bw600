@@ -9,7 +9,10 @@ import sys
 import time
 
 from . import protocol as p
-from .device import BW600, DeviceError, find_devices
+from .device import (BW600, DeviceError, calibration_backup_path, find_devices,
+                     load_calibration_backup)
+
+CAL_UNLOCK_WORD = "CALIBRATE"
 
 FLOAT_CMDS = {
     "value": p.Cmd.SET_VALUE,
@@ -81,6 +84,18 @@ def print_status(dev: BW600) -> None:
     print(f"  Standby time            : {s.standby_time}")
     print(f"  Language                : {s.language}")
     print(f"  Calibration V / I / T   : {s.cal_voltage:g} / {s.cal_current:g} / {s.cal_temp:g}")
+
+
+def confirm_calibration(args, description: str) -> bool:
+    """Calibration needs --unlock-calibration AND the unlock word typed at the prompt."""
+    if not getattr(args, "unlock_calibration", False):
+        print("error: calibration is locked; add --unlock-calibration to change it", file=sys.stderr)
+        return False
+    print(description)
+    if not sys.stdin.isatty():
+        print("error: calibration can only be changed interactively", file=sys.stderr)
+        return False
+    return input(f"Type {CAL_UNLOCK_WORD} to write it: ").strip() == CAL_UNLOCK_WORD
 
 
 def cmd_monitor(dev: BW600, args) -> None:
@@ -159,6 +174,10 @@ def main(argv=None) -> int:
     s = sub.add_parser("set", help="change a setting")
     s.add_argument("name", choices=sorted(list(FLOAT_CMDS) + list(BYTE_CMDS) + ["time"]))
     s.add_argument("value", help="number, or H:MM for time")
+    s.add_argument("--unlock-calibration", action="store_true", help="required for cal-* settings")
+    c = sub.add_parser("calibration", help="show the calibration factors and backup, or restore the backup")
+    c.add_argument("action", choices=["show", "restore"])
+    c.add_argument("--unlock-calibration", action="store_true", help="required for restore")
     a = sub.add_parser("action", help="clear / zero / factory-reset")
     a.add_argument("name", choices=sorted(ACTIONS))
     a.add_argument("--yes", action="store_true", help="do not ask for confirmation")
@@ -203,12 +222,44 @@ def main(argv=None) -> int:
                 if args.name == "time":
                     h, _, mm = args.value.partition(":")
                     dev.set_time_limit(int(h), int(mm or 0))
+                elif FLOAT_CMDS.get(args.name) in p.CAL_COMMANDS:
+                    cmd = FLOAT_CMDS[args.name]
+                    value = p.check_calibration(float(args.value))
+                    old = getattr(dev.settings, p.CAL_FIELDS[cmd])
+                    if abs(value - old) < 5e-7:
+                        print(f"{args.name} is already {old:.7g}; nothing written")
+                        return 0
+                    if not confirm_calibration(args, f"{args.name}: {old:.7g} -> {value:.7g}"):
+                        print("calibration unchanged")
+                        return 1
+                    dev.unlock_calibration(30)
+                    dev.write_calibration({cmd: value})
                 elif args.name in FLOAT_CMDS:
                     dev.set_float(FLOAT_CMDS[args.name], float(args.value))
                 else:
                     dev.set_byte(BYTE_CMDS[args.name], int(args.value))
                 time.sleep(1.0)
                 print_status(dev)
+            elif args.cmd == "calibration":
+                s = wait_for(dev, "settings")
+                backup = load_calibration_backup(dev.info.serial)
+                print(f"Device : voltage {s.cal_voltage:.6g}  current {s.cal_current:.6g}  temperature {s.cal_temp:.6g}")
+                if backup:
+                    print(f"Backup : voltage {backup['cal_voltage']:.6g}  current {backup['cal_current']:.6g}  "
+                          f"temperature {backup['cal_temp']:.6g}\n         {calibration_backup_path(dev.info.serial)}")
+                else:
+                    print("Backup : none")
+                if args.action == "restore":
+                    if not backup:
+                        print("error: no backup for this device", file=sys.stderr)
+                        return 2
+                    if not confirm_calibration(args, "Restore the backup values above?"):
+                        print("calibration unchanged")
+                        return 1
+                    dev.unlock_calibration(30)
+                    dev.write_calibration({cmd: backup[field] for cmd, field in p.CAL_FIELDS.items()})
+                    time.sleep(1.0)
+                    print("restored")
             elif args.cmd == "action":
                 if not args.yes and input(f"Really '{args.name}'? [y/N] ").lower() != "y":
                     return 1

@@ -39,7 +39,7 @@ pip install --user .          # optional: installs the `bw600` command
   - a lost input
   - a stop made on the device itself
 - **Application alarms (Protection tab):** your own over-voltage, under-voltage and over-current limits, checked on every reading (4× a second), even while idle. The under-voltage alarm ignores readings below 0.5 V, which means nothing is connected. When one trips you get a red banner and a popup, and the load can switch off automatically. The limits are saved to `~/.config/bw600/alarms.json`.
-- **Calibration:** voltage, current and temperature factors. Don't change these unless you really need to.
+- **Calibration:** voltage, current and temperature factors, **locked by default**. To change one you type `CALIBRATE` to unlock. The lock comes back after 2 minutes and after every write. Factors must be between 0.5 and 1.5, you confirm each change with the old and new values shown, and writing an unchanged value is skipped. The first time the app sees a device, it saves that device's calibration to `~/.config/bw600/calibration-<serial>.json`, and a Restore button (also locked) can put those values back.
 - **Raw / Info:** a HID frame log and a hex-send box, for debugging.
 
 The vendor software can't change the mode. This app can, because the mode commands were found by decrypting and disassembling the BW600 firmware (see Protocol below).
@@ -59,6 +59,9 @@ bw600 set time 1:30                # time limit h:mm
 bw600 set brightness 9             # 0..9; also: standby-brightness (0..9) standby-time language
 bw600 set cycles 10                # cycles for the charge/discharge cycle test
 bw600 action clear                 # also: zero, factory-reset
+bw600 calibration show             # factors on the device + the saved backup
+bw600 set cal-voltage 1.0017 --unlock-calibration   # asks you to type CALIBRATE
+bw600 calibration restore --unlock-calibration      # write the backup back
 bw600 raw --tx --seconds 3         # dump HID traffic
 ```
 

@@ -8,7 +8,7 @@ import datetime as dt
 import queue
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import matplotlib
 
@@ -18,7 +18,11 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from . import protocol as p  # noqa: E402
 from .alarms import AlarmConfig, AlarmEvent  # noqa: E402
-from .device import BW600, DeviceError, find_devices  # noqa: E402
+from .device import (BW600, CalibrationLocked, DeviceError, calibration_backup_path,  # noqa: E402
+                     find_devices, load_calibration_backup)
+
+CAL_UNLOCK_WORD = "CALIBRATE"
+CAL_UNLOCK_SECONDS = 120
 
 REFRESH_MS = 200
 HISTORY = 36000  # samples kept for the chart (~2.5 h at 4 Hz)
@@ -374,11 +378,33 @@ class App(tk.Tk):
                   text="Reference calibration factors. The manufacturer advises NOT to change these under "
                        "normal circumstances — wrong values make every measurement wrong. Note the current "
                        "values before changing anything.").pack(fill="x", pady=(0, 10))
+        lock = ttk.Frame(frame)
+        lock.pack(fill="x", pady=(0, 8))
+        self.cal_state_var = tk.StringVar(value="🔒 Locked")
+        self.cal_state_lbl = tk.Label(lock, textvariable=self.cal_state_var, font=("DejaVu Sans", 11, "bold"),
+                                      fg="#58151c", padx=6)
+        self.cal_state_lbl.pack(side="left")
+        ttk.Button(lock, text="Unlock…", command=self.unlock_calibration).pack(side="left", padx=6)
+        ttk.Button(lock, text="Lock now", command=self.lock_calibration).pack(side="left")
+
         g = ttk.LabelFrame(frame, text="Calibration factors", padding=10)
         g.pack(fill="x")
+        self.cal_widgets = []
         for i, (label, cmd, unit, key) in enumerate(FLOAT_SETTINGS_CAL):
-            self._setting_row(g, i, label, unit, key,
-                              lambda c=cmd, k=key: self.apply_float(c, k, confirm=True))
+            self._setting_row(g, i, label, unit, key, lambda c=cmd, k=key: self.apply_calibration(c, k))
+            self.cal_widgets += [w for w in g.grid_slaves(row=i) if isinstance(w, (ttk.Entry, ttk.Button))]
+        ttk.Label(g, style="Cap.TLabel", text=f"Allowed range {p.CAL_LIMITS[0]}–{p.CAL_LIMITS[1]}. "
+                  "Unlocking lasts 2 minutes and ends after every write.").grid(
+            row=len(FLOAT_SETTINGS_CAL), column=0, columnspan=5, sticky="w", pady=(6, 0))
+
+        b = ttk.LabelFrame(frame, text="Backup", padding=10)
+        b.pack(fill="x", pady=10)
+        self.cal_backup_var = tk.StringVar(value="No backup yet (saved automatically on first connection).")
+        ttk.Label(b, textvariable=self.cal_backup_var, style="Cap.TLabel", justify="left").pack(anchor="w")
+        self.cal_restore_btn = ttk.Button(b, text="Restore backup values", command=self.restore_calibration)
+        self.cal_restore_btn.pack(anchor="w", pady=(6, 0))
+        self.cal_widgets.append(self.cal_restore_btn)
+        self._update_cal_lock()
 
     def _build_console(self, nb):
         frame = ttk.Frame(nb, padding=6)
@@ -433,7 +459,7 @@ class App(tk.Tk):
             return False
         return True
 
-    def apply_float(self, cmd, key, confirm=False):
+    def apply_float(self, cmd, key):
         if not self._need_dev():
             return
         try:
@@ -441,9 +467,97 @@ class App(tk.Tk):
         except ValueError:
             messagebox.showerror("BW600", "Please enter a number.")
             return
-        if confirm and not messagebox.askyesno("BW600", f"Write calibration value {value}?"):
+        try:
+            self.dev.set_float(cmd, value)
+        except DeviceError as e:
+            messagebox.showerror("BW600", str(e))
+
+    # ------------------------------------------------------ calibration lock
+    def _update_cal_lock(self):
+        unlocked = bool(self.dev and self.dev.calibration_unlocked)
+        for w in self.cal_widgets:
+            w.state(["!disabled"] if unlocked else ["disabled"])
+        if unlocked:
+            self.cal_state_var.set(f"🔓 Unlocked — locks again in {int(self.dev.calibration_unlock_remaining())} s")
+            self.cal_state_lbl.configure(fg="#8a6d00")
+        else:
+            self.cal_state_var.set("🔒 Locked")
+            self.cal_state_lbl.configure(fg="#58151c")
+        if self.dev:
+            backup = load_calibration_backup(self.dev.info.serial)
+            if backup:
+                self.cal_backup_var.set(
+                    f"Saved values: voltage {backup['cal_voltage']:.6g}, current {backup['cal_current']:.6g}, "
+                    f"temperature {backup['cal_temp']:.6g}\n{calibration_backup_path(self.dev.info.serial)}")
+
+    def unlock_calibration(self):
+        if not self._need_dev():
             return
-        self.dev.set_float(cmd, value)
+        word = simpledialog.askstring(
+            "Unlock calibration",
+            f"Changing calibration makes every measurement wrong if done incorrectly.\n\n"
+            f"Type {CAL_UNLOCK_WORD} to unlock for {CAL_UNLOCK_SECONDS // 60} minutes:", parent=self)
+        if word is None:
+            return
+        if word.strip() != CAL_UNLOCK_WORD:
+            messagebox.showerror("BW600", "Wrong word — calibration stays locked.")
+            return
+        self.dev.unlock_calibration(CAL_UNLOCK_SECONDS)
+        self._update_cal_lock()
+
+    def lock_calibration(self):
+        if self.dev:
+            self.dev.lock_calibration()
+        self._update_cal_lock()
+
+    def apply_calibration(self, cmd, key):
+        if not self._need_dev():
+            return
+        if not self.dev.calibration_unlocked:
+            messagebox.showwarning("BW600", "Calibration is locked.")
+            self._update_cal_lock()
+            return
+        try:
+            value = p.check_calibration(float(self.entries[key].get().replace(",", ".")))
+        except ValueError as e:
+            messagebox.showerror("BW600", str(e) if "between" in str(e) else "Please enter a number.")
+            return
+        old = getattr(self.dev.settings, key) if self.dev.settings else None
+        if old is not None and abs(value - old) < 5e-7:
+            messagebox.showinfo("BW600", "No change — that is already the device's value. Nothing was written.")
+            return
+        change = f"{old:.6g} → {value:.6g}" if old is not None else f"→ {value:.6g}"
+        big = old is not None and old and abs(value - old) / abs(old) > 0.05
+        warn = "\n\n⚠ This changes the factor by more than 5 %." if big else ""
+        if not messagebox.askyesno("Confirm calibration change",
+                                   f"{key.replace('cal_', '').capitalize()} calibration: {change}{warn}\n\nWrite it?",
+                                   icon="warning", default="no"):
+            return
+        try:
+            self.dev.write_calibration({cmd: value})
+        except DeviceError as e:
+            messagebox.showerror("BW600", str(e))
+        self._update_cal_lock()
+
+    def restore_calibration(self):
+        if not self._need_dev():
+            return
+        backup = load_calibration_backup(self.dev.info.serial)
+        if not backup:
+            messagebox.showinfo("BW600", "No calibration backup exists for this device.")
+            return
+        if not self.dev.calibration_unlocked:
+            messagebox.showwarning("BW600", "Calibration is locked.")
+            return
+        text = ", ".join(f"{k.replace('cal_', '')} {v:.6g}" for k, v in backup.items())
+        if not messagebox.askyesno("Restore calibration", f"Write the saved values?\n\n{text}",
+                                   icon="warning", default="no"):
+            return
+        try:
+            self.dev.write_calibration({cmd: backup[field] for cmd, field in p.CAL_FIELDS.items()})
+        except DeviceError as e:
+            messagebox.showerror("BW600", str(e))
+        self._update_cal_lock()
 
     def apply_byte(self, cmd, var):
         if not self._need_dev():
@@ -502,11 +616,13 @@ class App(tk.Tk):
         try:
             data = bytes.fromhex(self.raw_entry.get())
             self.dev.send(data)
-        except ValueError as e:
+        except (ValueError, CalibrationLocked) as e:
             messagebox.showerror("BW600", str(e))
 
     # ------------------------------------------------------------ updates
     def refresh(self):
+        if self.dev and (self.dev.calibration_unlocked or "Unlocked" in self.cal_state_var.get()):
+            self._update_cal_lock()
         try:
             while True:
                 kind, payload = self.events.get_nowait()
@@ -633,6 +749,8 @@ class App(tk.Tk):
         label, unit = p.SET_VALUE_LABEL.get(s.mode, ("Set value", ""))
         self.setval_label.set(label)
         self.setval_unit.set(unit)
+        if not self.settings_loaded:
+            self.after(500, self._update_cal_lock)  # show the backup saved on first contact
         self.current_labels["mode"].set(f"device: {p.mode_name(s.mode)}")
         if not self.settings_loaded or not self.mode_choice.get():
             self.mode_choice.set(p.mode_name(s.mode))
@@ -641,9 +759,10 @@ class App(tk.Tk):
                 self.current_labels[key].set("device: n/a in this mode")
                 continue
             val = getattr(s, key)
-            self.current_labels[key].set(f"device: {val:.4g}")
+            digits = 7 if key in p.CAL_FIELDS.values() else 4  # calibration: full float32 precision
+            self.current_labels[key].set(f"device: {val:.{digits}g}")
             if not self.settings_loaded:
-                self.entries[key].set(f"{val:.4g}")
+                self.entries[key].set(f"{val:.{digits}g}")
         for _l, _c, key in BYTE_SETTINGS + (CYCLE_SETTING,):
             self.current_labels[key].set(f"device: {getattr(s, key)}")
             if not self.settings_loaded:

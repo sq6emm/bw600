@@ -78,6 +78,20 @@ def check_byte(cmd: int, value: int) -> int:
     return value
 
 
+# Calibration: only written through BW600.write_calibration() after an explicit
+# unlock, and only with factors inside CAL_LIMITS.
+CAL_COMMANDS = frozenset({Cmd.CAL_TEMP, Cmd.CAL_VOLTAGE, Cmd.CAL_CURRENT})
+CAL_FIELDS = {Cmd.CAL_VOLTAGE: "cal_voltage", Cmd.CAL_CURRENT: "cal_current", Cmd.CAL_TEMP: "cal_temp"}
+CAL_LIMITS = (0.5, 1.5)
+
+
+def check_calibration(value: float) -> float:
+    lo, hi = CAL_LIMITS
+    if not (lo <= value <= hi):  # also rejects NaN
+        raise ValueError(f"calibration factor must be between {lo} and {hi}")
+    return value
+
+
 # Commands that must never be sent from this tool (firmware upgrade path).
 FORBIDDEN_RAW = {0x02}
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import collections
 import glob
+import json
 import os
 import select
 import threading
@@ -43,6 +44,42 @@ def find_devices() -> list[DeviceInfo]:
 
 class DeviceError(Exception):
     pass
+
+
+class CalibrationLocked(DeviceError):
+    pass
+
+
+BACKUP_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "bw600")
+
+
+def calibration_backup_path(serial: str) -> str:
+    return os.path.join(BACKUP_DIR, f"calibration-{serial or 'unknown'}.json")
+
+
+def load_calibration_backup(serial: str) -> dict | None:
+    """Calibration factors saved the first time this device was seen."""
+    try:
+        with open(calibration_backup_path(serial), encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: float(data[k]) for k in p.CAL_FIELDS.values()}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_calibration_backup(serial: str, s: p.Settings) -> None:
+    path = calibration_backup_path(serial)
+    if os.path.exists(path):
+        return
+    values = {k: getattr(s, k) for k in p.CAL_FIELDS.values()}
+    try:
+        if not all(p.check_calibration(v) for v in values.values()):
+            return
+    except ValueError:
+        return  # never back up implausible values
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({**values, "saved": time.strftime("%Y-%m-%d %H:%M:%S")}, f, indent=2)
 
 
 class HidrawDevice:
@@ -124,6 +161,8 @@ class BW600:
         self._stop_requested_at = 0.0
         self._stop_note: str | None = None
         self.alarms = AlarmMonitor(AlarmConfig.load())
+        self._cal_unlocked_until = 0.0
+        self._cal_backup_done = False
         self.on_alarm: list[Callable[[AlarmEvent], None]] = []
 
     # -- lifecycle ---------------------------------------------------------
@@ -149,9 +188,11 @@ class BW600:
         return self.error is None and time.monotonic() - self.last_rx < 3.0
 
     # -- commands ----------------------------------------------------------
-    def send(self, report: bytes) -> None:
+    def send(self, report: bytes, _calibration: bool = False) -> None:
         if len(report) >= 4 and report[:2] == p.TX_HEAD and report[3] in p.FORBIDDEN_RAW:
             raise ValueError("Firmware-upgrade commands are blocked.")
+        if len(report) >= 4 and report[:2] == p.TX_HEAD and report[3] in p.CAL_COMMANDS and not _calibration:
+            raise CalibrationLocked("Calibration can only be changed with write_calibration() after unlocking.")
         with self._lock:
             self._queue.append(report)
 
@@ -170,7 +211,42 @@ class BW600:
     def stop_load(self) -> None:
         self.run(False)
 
+    # -- calibration (locked by default) -----------------------------------
+    @property
+    def calibration_unlocked(self) -> bool:
+        return time.monotonic() < self._cal_unlocked_until
+
+    def calibration_unlock_remaining(self) -> float:
+        return max(0.0, self._cal_unlocked_until - time.monotonic())
+
+    def unlock_calibration(self, seconds: float = 120.0) -> None:
+        self._cal_unlocked_until = time.monotonic() + seconds
+
+    def lock_calibration(self) -> None:
+        self._cal_unlocked_until = 0.0
+
+    def write_calibration(self, values: dict) -> None:
+        """Write calibration factors {Cmd.CAL_*: value}. Requires unlock_calibration();
+        every value must be within CAL_LIMITS. Locks again afterwards."""
+        if not self.calibration_unlocked:
+            raise CalibrationLocked("Calibration is locked. Unlock it first.")
+        if self.live and self.live.running:
+            raise DeviceError("Stop the load before changing calibration.")
+        for cmd, value in values.items():
+            if cmd not in p.CAL_COMMANDS:
+                raise ValueError(f"not a calibration command: {cmd}")
+            p.check_calibration(value)
+        try:
+            for cmd, value in values.items():
+                self.send(p.float_frame(cmd, value, self.addr), _calibration=True)
+        finally:
+            self.lock_calibration()
+        self.request_settings()
+
     def set_float(self, cmd: p.Cmd, value: float) -> None:
+        if cmd in p.CAL_COMMANDS:
+            self.write_calibration({cmd: value})
+            return
         self.send(p.float_frame(cmd, value, self.addr))
         self.request_settings()
 
@@ -251,6 +327,12 @@ class BW600:
             s = p.parse_settings(buf)
             if s:
                 self.settings = s
+                if not self._cal_backup_done:
+                    self._cal_backup_done = True
+                    try:
+                        _save_calibration_backup(self.info.serial, s)
+                    except OSError:
+                        pass
                 for cb in list(self.on_settings):
                     cb(s)
         elif t == 0x04:
