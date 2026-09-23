@@ -226,6 +226,18 @@ class App(tk.Tk):
         frame = ttk.Frame(nb, padding=12)
         nb.add(frame, text="Test setup")
 
+        md = ttk.LabelFrame(frame, text="Mode", padding=10)
+        md.pack(fill="x", pady=(0, 10))
+        self.mode_choice = tk.StringVar()
+        self.mode_combo = ttk.Combobox(md, textvariable=self.mode_choice, state="readonly", width=32,
+                                       values=[p.MODE_NAMES[m] for m in p.Mode])
+        self.mode_combo.grid(row=0, column=0)
+        ttk.Button(md, text="Set mode", command=self.apply_mode).grid(row=0, column=1, padx=6)
+        self.current_labels["mode"] = tk.StringVar(value="device: —")
+        ttk.Label(md, textvariable=self.current_labels["mode"], style="Cap.TLabel").grid(row=0, column=2, padx=8)
+        ttk.Label(md, style="Cap.TLabel", text="The load must be off to change the mode.").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
         g = ttk.LabelFrame(frame, text="Load setpoint", padding=10)
         g.pack(fill="x")
         self.setval_label = tk.StringVar(value="Set value")
@@ -238,9 +250,8 @@ class App(tk.Tk):
         self.current_labels["set_value"] = tk.StringVar(value="device: —")
         ttk.Label(g, textvariable=self.current_labels["set_value"], style="Cap.TLabel").grid(row=0, column=4, padx=8)
         ttk.Label(g, style="Cap.TLabel", wraplength=620, justify="left",
-                  text="The meaning follows the mode selected on the device: current (CC), voltage (CV), "
-                       "resistance (CR) or power (CP). The mode itself is chosen with the knob/buttons "
-                       "on the BW600; the protocol reports it but has no command to change it.").grid(
+                  text="The meaning follows the selected mode: current (CC), voltage (CV), "
+                       "resistance (CR) or power (CP).").grid(
             row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
 
         t = ttk.LabelFrame(frame, text="Battery test limits", padding=10)
@@ -443,6 +454,18 @@ class App(tk.Tk):
         if self._need_dev():
             self.dev.set_language(opt)
 
+    def apply_mode(self):
+        if not self._need_dev():
+            return
+        names = {v: k for k, v in p.MODE_NAMES.items()}
+        mode = names.get(self.mode_choice.get())
+        if mode is None:
+            return
+        try:
+            self.dev.set_mode(mode)
+        except DeviceError as e:
+            messagebox.showwarning("BW600", str(e))
+
     def confirm_simple(self, cmd, question):
         if self._need_dev() and messagebox.askyesno("BW600", question):
             self.dev.simple(cmd)
@@ -596,7 +619,13 @@ class App(tk.Tk):
         label, unit = p.SET_VALUE_LABEL.get(s.mode, ("Set value", ""))
         self.setval_label.set(label)
         self.setval_unit.set(unit)
+        self.current_labels["mode"].set(f"device: {p.mode_name(s.mode)}")
+        if not self.settings_loaded or not self.mode_choice.get():
+            self.mode_choice.set(p.mode_name(s.mode))
         for key in ["set_value"] + [k for *_x, k in FLOAT_SETTINGS_TEST + FLOAT_SETTINGS_PROTECT + FLOAT_SETTINGS_CAL]:
+            if key == "set_value" and s.mode in p.NO_SET_VALUE_MODES:
+                self.current_labels[key].set("device: n/a in this mode")
+                continue
             val = getattr(s, key)
             self.current_labels[key].set(f"device: {val:.4g}")
             if not self.settings_loaded:

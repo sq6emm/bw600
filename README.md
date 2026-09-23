@@ -20,6 +20,7 @@ pip install --user .          # optional: installs the `bw600` command
 - **Chart:** live curves you can pick, with a 1 min to all-data window, pause, and export to CSV or PNG.
 - **Recording:** continuous CSV log, with columns compatible with the vendor software.
 - **Test setup:**
+  - the operating mode (CC, CV, CR, CP, internal resistance, power-supply test, cable test, and the three charge/discharge programs), which can only be changed while the load is off
   - the set value, which means current, voltage, resistance or power depending on the device mode
   - cut-off voltage, charge full voltage and charge end current
   - the time limit
@@ -39,7 +40,7 @@ pip install --user .          # optional: installs the `bw600` command
 - **Calibration:** voltage, current and temperature factors. Don't change these unless you really need to.
 - **Raw / Info:** a HID frame log and a hex-send box, for debugging.
 
-The device reports its mode (CC, CV, CR, CP, internal resistance, power-supply test, cable test, the charge/discharge programs), but the protocol has no command to change it. Choose the mode on the BW600 itself.
+The vendor software can't change the mode. This app can, because the mode commands were found by decrypting and disassembling the BW600 firmware (see Protocol below).
 
 ## CLI
 
@@ -49,6 +50,7 @@ bw600 monitor --csv log.csv        # stream readings, report stops with their re
 bw600 monitor --max-voltage 14.6 --min-voltage 10.5 --max-current 5   # with alarms
                                    # (add --warn-only to keep the load running)
 bw600 start | stop                 # load on/off
+bw600 mode cc                      # cc cv cr cp ir psu cable cdc cdcdc cycle (load off)
 bw600 set value 2.5                # setpoint (A / V / Ω / W per mode)
 bw600 set cutoff 3.0               # also: full-voltage full-current ocp opp ntc-otp mos-otp
 bw600 set time 1:30                # time limit h:mm
@@ -83,5 +85,17 @@ I reverse-engineered this from the vendor's Windows software.
 | 2C / 2D / 2E / 2F | OCP / OPP / NTC OTP / MOS OTP | float |
 | 31 | time limit | d0 = value, d3 = 1 hours / 2 minutes |
 | 32 / 33 / 34 | clear capacity / factory reset / zero readings | – |
+| 47 … 50 | select mode 0 … 9 (cmd = 0x47 + mode) | – |
 
 `55 05 09 02 …` starts the firmware bootloader, so this tool refuses to send cmd `02`. Firmware updating isn't implemented.
+
+The firmware also handles commands 07, 35, 37, 45, 46 and 51, which this app doesn't use. 45, 46 and 51 switch between screens; I haven't worked out what the others do. It doesn't handle 30 or 36.
+
+### How the mode commands were found
+
+The vendor software never sends a mode command, so I read the firmware instead. The update file on ATORCH's site, for firmware V2.0.5, is a JieLi AC632N image and is encrypted:
+
+- **File table:** each 32-byte entry is XOR'd with a CRC16-CCITT keystream seeded with `0xFFFF`.
+- **Application area:** encrypted in 32-byte blocks with the chip key `0x8D07` XOR (offset ÷ 4), where the offset is counted from the start of the application area.
+
+Once decrypted, the application runs on JieLi's q32s CPU and can be disassembled with the `objdump` in JieLi's Linux toolchain. The command dispatcher is a `tbh` jump table covering commands 0x03 to 0x51. Commands 0x47 to 0x50 write 0 to 9 to the mode byte and switch to that mode's screen. All ten mode commands were then checked on the device.

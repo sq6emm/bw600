@@ -190,6 +190,13 @@ class BW600:
         self.send(p.language_frame(option, self.addr))
         self.request_settings()
 
+    def set_mode(self, mode: int) -> None:
+        """Select the operating mode (the load must be off)."""
+        if self.live and self.live.running:
+            raise DeviceError("Stop the load before changing the mode.")
+        self.send(p.mode_frame(mode, self.addr))
+        self.request_settings()
+
     def simple(self, cmd: p.Cmd) -> None:
         self.send(p.simple_frame(cmd, self.addr))
         self.request_settings()

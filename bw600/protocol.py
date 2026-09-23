@@ -58,7 +58,7 @@ class Cmd(IntEnum):
     CLEAR_CAPACITY = 0x32  # "clear current" button: resets accumulated Ah/Wh
     FACTORY_RESET = 0x33
     DATA_ZERO = 0x34       # zero offset of measurements
-    DT20_OPTION = 0x36     # d3 = combo box index (DT20 settings page)
+    SELECT_MODE = 0x47     # 0x47 + Mode (0..9); no payload. Found in the device firmware.
 
 
 # Commands that must never be sent from this tool (firmware upgrade path).
@@ -90,6 +90,16 @@ MODE_NAMES = {
     Mode.CDCDC: "Charge-discharge x2-charge",
     Mode.CYCLE_TEST: "Charge/discharge cycle test",
 }
+
+# Short names for the command line.
+MODE_KEYS = {
+    "cc": Mode.CC, "cv": Mode.CV, "cr": Mode.CR, "cp": Mode.CP,
+    "ir": Mode.INTERNAL_RESISTANCE, "psu": Mode.POWER_SUPPLY_TEST, "cable": Mode.CABLE_TEST,
+    "cdc": Mode.CHARGE_DISCHARGE_CHARGE, "cdcdc": Mode.CDCDC, "cycle": Mode.CYCLE_TEST,
+}
+
+# Modes whose settings reply carries no meaningful set value.
+NO_SET_VALUE_MODES = {Mode.INTERNAL_RESISTANCE, Mode.POWER_SUPPLY_TEST, Mode.CABLE_TEST}
 
 # (label, unit) of the SET_VALUE parameter per mode, as shown by the vendor app.
 SET_VALUE_LABEL = {
@@ -153,6 +163,11 @@ def time_limit_frames(hours: int, minutes: int, addr: int = DEFAULT_ADDR) -> lis
         frame(Cmd.TIME_LIMIT, bytes([hours, 0, 0, 1]), addr),
         frame(Cmd.TIME_LIMIT, bytes([minutes, 0, 0, 2]), addr),
     ]
+
+
+def mode_frame(mode: int, addr: int = DEFAULT_ADDR) -> bytes:
+    mode = Mode(mode)
+    return frame(Cmd.SELECT_MODE + mode, b"\x00\x00\x00\x00", addr)
 
 
 def simple_frame(cmd: int, addr: int = DEFAULT_ADDR) -> bytes:

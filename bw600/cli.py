@@ -65,7 +65,8 @@ def print_status(dev: BW600) -> None:
     print(f"Fan level     : {live.fan:g}")
     print("Settings:")
     label, unit = p.SET_VALUE_LABEL.get(s.mode, ("Set value", ""))
-    print(f"  {label:<24}: {s.set_value:g} {unit}")
+    value = "n/a in this mode" if s.mode in p.NO_SET_VALUE_MODES else f"{s.set_value:g} {unit}"
+    print(f"  {label:<24}: {value}")
     print(f"  Cut-off voltage         : {s.cutoff_voltage:g} V")
     print(f"  Full voltage            : {s.full_voltage:g} V")
     print(f"  Full (end) current      : {s.full_current:g} A")
@@ -149,6 +150,10 @@ def main(argv=None) -> int:
     m.add_argument("--warn-only", action="store_true", help="alarms only warn, do not switch the load off")
     sub.add_parser("start", help="switch the load ON")
     sub.add_parser("stop", help="switch the load OFF")
+    md = sub.add_parser("mode", help="select the operating mode (load must be off)")
+    md.add_argument("name", choices=list(p.MODE_KEYS),
+                    help="cc cv cr cp | ir (internal resistance) psu (power supply test) cable | "
+                         "cdc (charge-discharge-charge) cdcdc cycle")
     s = sub.add_parser("set", help="change a setting")
     s.add_argument("name", choices=sorted(list(FLOAT_CMDS) + list(BYTE_CMDS) + ["time"]))
     s.add_argument("value", help="number, or H:MM for time")
@@ -186,6 +191,11 @@ def main(argv=None) -> int:
                 dev.run(args.cmd == "start")
                 time.sleep(0.6)
                 print("Load is", "ON" if dev.live.running else "OFF")
+            elif args.cmd == "mode":
+                wait_for(dev, "live")
+                dev.set_mode(p.MODE_KEYS[args.name])
+                time.sleep(1.0)
+                print("Mode:", p.mode_name(dev.settings.mode))
             elif args.cmd == "set":
                 wait_for(dev, "settings")
                 if args.name == "time":

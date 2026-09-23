@@ -158,3 +158,13 @@ def test_under_voltage_alarm():
     assert mon.active() == []
     mon.check(_live(9.5, 5.0))
     assert [e.kind for e in mon.check(_live(9.5, 5.0))] == ["under_voltage"]
+
+
+def test_mode_frames():
+    # Verified on a BW600 V2.0.5: 0x47 + mode selects the mode.
+    assert p.mode_frame(p.Mode.CC) == bytes.fromhex("55050147 00000000 EEFF")
+    assert p.mode_frame(p.Mode.CV) == bytes.fromhex("55050148 00000000 EEFF")
+    assert p.mode_frame(p.Mode.CYCLE_TEST) == bytes.fromhex("55050150 00000000 EEFF")
+    assert {p.MODE_KEYS[k] for k in p.MODE_KEYS} == set(p.Mode)
+    with pytest.raises(ValueError):
+        p.mode_frame(10)
