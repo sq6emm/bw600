@@ -115,7 +115,9 @@ The firmware also handles a few commands this app doesn't use:
 - **45, 46, 51** switch between screens.
 - **02** with address `09` (`55 05 09 02 …`) restarts into the firmware updater. The app refuses to send it.
 
-It doesn't handle 30 or 36.
+It doesn't handle 30, 36 or 38–44.
+
+In BRT, PT and CT mode, cmd 21 ignores its value and only refreshes the screen. The settings the device offers on its own PT screen, such as the current step/speed, aren't in the settings reply, and no USB command or Tuya data point writes them. They can only be set on the device.
 
 ### Fan
 
