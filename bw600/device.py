@@ -462,7 +462,8 @@ class BW600:
             if requested and self._stop_note:
                 event = p.StopEvent("alarm", f"Stopped by this application — {self._stop_note}", inferred=False)
             else:
-                event = p.infer_stop_reason([s for _t, s in self._window], self.settings, run_s, requested)
+                event = p.infer_stop_reason([s for _t, s in self._window], self.settings, run_s, requested,
+                                             after=live)
             self._stop_note = None
             self.last_stop = event
             self._window.clear()

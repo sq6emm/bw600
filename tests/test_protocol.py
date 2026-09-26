@@ -120,6 +120,23 @@ def test_stop_reason_user_and_unknown():
     assert p.infer_stop_reason([_live(11.8, 1.0)], s, run_seconds=30).reason == "device"
 
 
+def test_stop_reason_source_collapse():
+    # Real case (PT mode): the supply cut out at 10 A, the first idle reading was 4.1 V.
+    window = [_live(11.952, 9.273), _live(11.807, 9.661), _live(11.799, 10.046)]
+    ev = p.infer_stop_reason(window, _settings(mode=p.Mode.POWER_SUPPLY_TEST), run_seconds=43,
+                             after=_live(4.102, 0.171, running=False))
+    assert ev.reason == "source_drop"
+
+
+def test_stop_reason_not_charged_outside_charging_modes():
+    # Real case (PT mode): 0.011 A idle current without the discharge flag is not charging.
+    idle = [p.Live(voltage=12.2, current=0.011, power=0.14, running=True) for _ in range(3)]
+    ev = p.infer_stop_reason(idle, _settings(mode=p.Mode.POWER_SUPPLY_TEST), run_seconds=38)
+    assert ev.reason == "pt_done"
+    ev = p.infer_stop_reason(idle, _settings(mode=p.Mode.CC), run_seconds=38)
+    assert ev.reason == "device"
+
+
 def test_stop_reason_time_limit_and_temps():
     s = _settings(time_limit_h=0, time_limit_m=1)
     assert p.infer_stop_reason([_live(11.8, 1.0)], s, run_seconds=60).reason == "time"

@@ -384,14 +384,19 @@ class StopEvent:
     inferred: bool = True
 
 
+# Modes in which the device charges the battery (the only ones where "charge complete" applies).
+CHARGING_MODES = {Mode.CHARGE_DISCHARGE_CHARGE, Mode.CDCDC, Mode.CYCLE_TEST}
+
+
 def infer_stop_reason(window: list[Live], settings: Settings | None,
                       run_seconds: float | None = None,
-                      requested: bool = False) -> StopEvent:
+                      requested: bool = False, after: Live | None = None) -> StopEvent:
     """Explain a running -> idle transition.
 
     ``window`` holds the live samples of the last few seconds while the load
-    was running (oldest first). ``run_seconds`` is how long the load ran as
-    observed by this program; ``requested`` is True if we sent the stop.
+    was running (oldest first); ``after`` is the first sample once it stopped.
+    ``run_seconds`` is how long the load ran as observed by this program;
+    ``requested`` is True if we sent the stop.
     """
     if requested:
         return StopEvent("user", "Stopped from this application.", inferred=False)
@@ -405,7 +410,10 @@ def infer_stop_reason(window: list[Live], settings: Settings | None,
     p_max = max((s.power or 0) for s in samples)
     t_mos = max((s.mos_temp or 0) for s in samples)
     t_ntc = max((s.ntc_temp or 0) for s in samples)
-    charging = any(s.running and not s.discharging and (s.amps or 0) > 0.01 for s in samples)
+    charging = settings.mode in CHARGING_MODES and any(
+        s.running and not s.discharging and (s.amps or 0) > 0.01 for s in samples)
+    # Voltage at the moment of the stop, which the running samples don't include.
+    v_after = after.voltage if after is not None else None
 
     def near(value, limit, rel=0.01, abs_=0.02):
         return value >= limit - max(abs_, rel * abs(limit))
@@ -416,6 +424,10 @@ def infer_stop_reason(window: list[Live], settings: Settings | None,
         return StopEvent("mos_otp", f"MOSFET over-temperature: {t_mos:.1f} °C ≥ {settings.mos_over_temp:g} °C.")
     if settings.ntc_over_temp > 0 and near(t_ntc, settings.ntc_over_temp, abs_=1.0):
         return StopEvent("ntc_otp", f"Probe over-temperature: {t_ntc:.1f} °C ≥ {settings.ntc_over_temp:g} °C.")
+    if v_after is not None and v_last >= 1.0 and v_after < 0.7 * v_last:
+        return StopEvent("source_drop", f"Source voltage collapsed: {v_last:.3f} V → {v_after:.3f} V at "
+                                        f"{samples[-1].amps or 0:.3f} A (supply overloaded, current-limited or "
+                                        f"switched off).")
     if settings.over_current > 0 and near(i_max, settings.over_current):
         return StopEvent("ocp", f"Over-current protection: {i_max:.3f} A ≥ {settings.over_current:g} A.")
     if settings.over_power > 0 and near(p_max, settings.over_power):
@@ -431,4 +443,7 @@ def infer_stop_reason(window: list[Live], settings: Settings | None,
     limit_s = (settings.time_limit_h * 60 + settings.time_limit_m) * 60
     if limit_s and run_seconds is not None and run_seconds >= limit_s - 5:
         return StopEvent("time", f"Time limit reached ({settings.time_limit_h} h {settings.time_limit_m} min).")
+    if settings.mode == Mode.POWER_SUPPLY_TEST:
+        return StopEvent("pt_done", f"Power supply test finished (peak {i_max:.3f} A, {p_max:.2f} W); "
+                                    f"see the results table on the device.")
     return StopEvent("device", "Stopped on the device (button/knob) or for a reason it does not report.")
