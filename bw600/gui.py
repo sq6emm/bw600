@@ -267,14 +267,16 @@ class App(tk.Tk):
         self.setval_unit = tk.StringVar(value="")
         ttk.Label(g, textvariable=self.setval_label).grid(row=0, column=0, sticky="w")
         self.entries["set_value"] = tk.StringVar()
-        ttk.Entry(g, textvariable=self.entries["set_value"], width=12).grid(row=0, column=1, padx=6)
+        self.setval_entry = ttk.Entry(g, textvariable=self.entries["set_value"], width=12)
+        self.setval_entry.grid(row=0, column=1, padx=6)
         ttk.Label(g, textvariable=self.setval_unit, width=4).grid(row=0, column=2, sticky="w")
-        ttk.Button(g, text="Set", command=lambda: self.apply_float(p.Cmd.SET_VALUE, "set_value")).grid(row=0, column=3)
+        self.setval_btn = ttk.Button(g, text="Set", command=lambda: self.apply_float(p.Cmd.SET_VALUE, "set_value"))
+        self.setval_btn.grid(row=0, column=3)
         self.current_labels["set_value"] = tk.StringVar(value="device: —")
         ttk.Label(g, textvariable=self.current_labels["set_value"], style="Cap.TLabel").grid(row=0, column=4, padx=8)
         ttk.Label(g, style="Cap.TLabel", wraplength=620, justify="left",
                   text="The meaning follows the selected mode: current (CC), voltage (CV), "
-                       "resistance (CR) or power (CP).").grid(
+                       "resistance (CR) or power (CP). BRT, PT and CT don't use it.").grid(
             row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
 
         t = ttk.LabelFrame(frame, text="Battery test limits", padding=10)
@@ -949,8 +951,11 @@ class App(tk.Tk):
     def on_settings(self, s: p.Settings):
         self.mode_var.set(f"Mode: {p.mode_name(s.mode)}")
         label, unit = p.SET_VALUE_LABEL.get(s.mode, ("Set value", ""))
-        self.setval_label.set(label)
-        self.setval_unit.set(unit)
+        unused = s.mode in p.NO_SET_VALUE_MODES      # BRT / PT / CT run their own sequence
+        self.setval_label.set("Not used in this mode" if unused else label)
+        self.setval_unit.set("" if unused else unit)
+        for w in (self.setval_entry, self.setval_btn):
+            w.state(["disabled" if unused else "!disabled"])
         if not self.settings_loaded:
             self.after(500, self._update_cal_lock)  # show the backup saved on first contact
         self.current_labels["mode"].set(f"device: {p.mode_name(s.mode)}")
