@@ -1066,7 +1066,10 @@ class App(tk.Tk):
         if self.csv_file:
             self.csv_file.close()
         if self.dev:
-            self.dev.close()
+            # Never leave the load running unattended: switch it off before disconnecting.
+            if not self.dev.close(stop_load=True):
+                messagebox.showerror("BW600", "Could not confirm that the load stopped. "
+                                              "Check the device and switch it off there!")
         self.destroy()
 
 

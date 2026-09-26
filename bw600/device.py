@@ -208,11 +208,31 @@ class BW600:
         self._thread.start()
         return self
 
-    def close(self) -> None:
+    def close(self, stop_load: bool = False) -> bool:
+        """Stop polling and release the device. With ``stop_load``, switch the
+        load off first and check that it stopped; returns False if that failed."""
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
+        stopped = True
+        if stop_load:
+            stopped = self._stop_load_now()
         self.dev.close()
+        return stopped
+
+    def _stop_load_now(self) -> bool:
+        """Send the stop directly (the poll thread is gone) until a live reading shows it off."""
+        for _ in range(3):
+            try:
+                self._write(p.run_frame(False, self.addr))
+                self._drain(0.1)
+                self._write(p.poll_frame(p.Cmd.READ_LIVE, self.addr))
+                self._drain(0.3)
+            except DeviceError:
+                continue
+            if self.live is not None and not self.live.running:
+                return True
+        return False
 
     def __enter__(self):
         return self.start()

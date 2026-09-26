@@ -127,11 +127,14 @@ class TuyaBW600(BW600):
     def online(self) -> bool:
         return self.error is None and time.monotonic() - self.last_rx < 6.0
 
-    def close(self) -> None:
+    def close(self, stop_load: bool = False) -> bool:
         self._stop.set()
         self._wake.set()
         if self._thread:
             self._thread.join(timeout=5)
+        stopped = True
+        if stop_load:
+            stopped = self._stop_load_now()
         if self.dev:
             try:
                 if self._refresh_before is False:       # restore the live-refresh switch
@@ -139,6 +142,21 @@ class TuyaBW600(BW600):
                 self.dev.close()
             except Exception:
                 pass
+        return stopped
+
+    def _stop_load_now(self) -> bool:
+        """Switch DP 104 off directly (the poll thread is gone) until the device reports it off."""
+        for _ in range(3):
+            try:
+                if self.dev is None:
+                    self._connect()
+                self.dev.set_value(104, False)
+                st = self.dev.status()
+                if st and "Error" not in st and not st.get("dps", {}).get("104", True):
+                    return True
+            except Exception:
+                self.dev = None
+        return False
 
     # -- commands (queued, executed by the poll thread) ----------------------
     def _set_dp(self, dp: int, value) -> None:
