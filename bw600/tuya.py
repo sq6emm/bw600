@@ -115,29 +115,34 @@ class TuyaBW600(BW600):
             if not ip:
                 raise DeviceError("BW600-DK not found on the network.")
             self.cfg["ip"] = ip
-        d = tt.Device(self.cfg["id"], ip, self.cfg["key"], version=float(self.cfg.get("version") or 3.5))
-        d.set_socketTimeout(5)
+        self.info = DeviceInfo(f"tuya://{ip}", self.info.name, self.info.serial)
+        self.dev = self._new_device(ip)
+
+    def _new_device(self, ip: str, timeout: float = 5):
+        d = self._tinytuya.Device(self.cfg["id"], ip, self.cfg["key"],
+                                  version=float(self.cfg.get("version") or 3.5))
+        d.set_socketTimeout(timeout)
         # Not persistent: the device pushes extra status messages after each write, and on a
         # persistent socket later reads return those stale messages (the view lags behind).
         d.set_socketPersistent(False)
-        self.info = DeviceInfo(f"tuya://{ip}", self.info.name, self.info.serial)
-        self.dev = d
+        return d
 
     @property
     def online(self) -> bool:
         return self.error is None and time.monotonic() - self.last_rx < 6.0
 
     def close(self, stop_load: bool = False) -> bool:
+        was_online = self.online
         self._stop.set()
         self._wake.set()
         if self._thread:
-            self._thread.join(timeout=5)
-        stopped = True
-        if stop_load:
-            stopped = self._stop_load_now()
+            # It may be stuck waiting out a socket timeout; it is a daemon, don't wait for that.
+            self._thread.join(timeout=1.0 if was_online else 0.5)
+        stopped = self._stop_on_close(was_online) if stop_load else True
         if self.dev:
             try:
-                if self._refresh_before is False:       # restore the live-refresh switch
+                # Restore the live-refresh switch, but only if the device just answered.
+                if was_online and stopped and self._refresh_before is False:
                     self.dev.set_value(122, False, nowait=True)
                 self.dev.close()
             except Exception:
@@ -145,17 +150,21 @@ class TuyaBW600(BW600):
         return stopped
 
     def _stop_load_now(self) -> bool:
-        """Switch DP 104 off directly (the poll thread is gone) until the device reports it off."""
+        """Switch DP 104 off until the device reports it off. Uses its own connection: the
+        poll thread may still be finishing a request on self.dev."""
+        ip = self.cfg.get("ip")
+        if not ip:
+            return False                                # no network scan while closing
+        d = self._new_device(ip, timeout=1.5)
+        d.set_socketRetryLimit(1)                       # fail fast instead of tinytuya's 5 retries
         for _ in range(3):
             try:
-                if self.dev is None:
-                    self._connect()
-                self.dev.set_value(104, False)
-                st = self.dev.status()
+                d.set_value(104, False)
+                st = d.status()
                 if st and "Error" not in st and not st.get("dps", {}).get("104", True):
                     return True
             except Exception:
-                self.dev = None
+                pass
         return False
 
     # -- commands (queued, executed by the poll thread) ----------------------

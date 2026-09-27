@@ -175,6 +175,8 @@ class BW600:
     def supports(self, feature: str) -> bool:
         return self.capabilities is None or feature in self.capabilities
 
+    stop_on_close_timeout = 3.0     # s: the most close(stop_load=True) waits for the stop
+
     def _init_state(self, interval: float) -> None:
         self.addr = p.DEFAULT_ADDR
         self.interval = interval
@@ -211,14 +213,33 @@ class BW600:
     def close(self, stop_load: bool = False) -> bool:
         """Stop polling and release the device. With ``stop_load``, switch the
         load off first and check that it stopped; returns False if that failed."""
+        was_online = self.online
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
-        stopped = True
-        if stop_load:
-            stopped = self._stop_load_now()
+        stopped = self._stop_on_close(was_online) if stop_load else True
         self.dev.close()
         return stopped
+
+    def _stop_on_close(self, was_online: bool) -> bool:
+        """Only try the stop while the device answers: retrying against an unplugged or
+        unreachable device would just hang the caller. Offline, report failure only if
+        the last reading showed the load running."""
+        if not was_online:
+            return not (self.live and self.live.running)
+        # A device that just went away still looks online for a few seconds, and every
+        # attempt then waits out an I/O timeout: give the whole stop a hard deadline.
+        result: list[bool] = []
+
+        def work():
+            try:
+                result.append(self._stop_load_now())
+            except Exception:
+                pass
+        t = threading.Thread(target=work, name="bw600-stop", daemon=True)
+        t.start()
+        t.join(self.stop_on_close_timeout)
+        return bool(result and result[0])
 
     def _stop_load_now(self) -> bool:
         """Send the stop directly (the poll thread is gone) until a live reading shows it off."""
